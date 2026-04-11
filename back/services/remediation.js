@@ -94,6 +94,29 @@ function sessionMeta(session) {
 }
 
 function listFindingsFromResults(results) {
+  if (Array.isArray(results?.findings) && results.findings.length) {
+    const out = [];
+    results.findings.forEach((finding) => {
+      (finding.locations || []).forEach((location, index) => {
+        out.push({
+          findingId: finding.id,
+          fingerprint: finding.fingerprint,
+          file: location.filePath || finding.filePath,
+          secret: finding.rawSecret,
+          type: finding.secretType,
+          line: location.lineStart ?? finding.lineStart,
+          commit: location.git?.commit || finding.git?.commit,
+          branch: location.git?.branch || finding.git?.branch,
+          ignored: !!location.ignored,
+          ignoreScope: location.ignoreScope || null,
+          findingKey: `${finding.id}#${index}`,
+          locationIndex: index,
+        });
+      });
+    });
+    return out;
+  }
+
   const out = [];
   const vulnerabilities = results?.vulnerabilities || {};
   for (const [file, secrets] of Object.entries(vulnerabilities)) {
@@ -301,7 +324,9 @@ function previewPatchForFinding(repoRoot, finding) {
 function uniqueFindings(findings) {
   const seen = new Set();
   return findings.filter((finding) => {
-    const key = `${finding.file}|${finding.line}|${finding.type}|${finding.secret}`;
+    const key =
+      finding.findingKey ||
+      `${finding.file}|${finding.line}|${finding.type}|${finding.secret}`;
     if (seen.has(key)) return false;
     seen.add(key);
     return true;
@@ -312,6 +337,19 @@ function matchTargetFindings(session, payload = {}) {
   const allFindings = uniqueFindings(listFindingsFromResults(session.results));
   if (payload.applyAll || payload.all) return allFindings;
   const target = payload.finding || payload;
+  if (target?.findingId) {
+    return allFindings.filter((finding) => {
+      if (String(finding.findingId) !== String(target.findingId)) return false;
+      if (
+        target.locationIndex !== undefined &&
+        target.locationIndex !== null &&
+        Number(finding.locationIndex) !== Number(target.locationIndex)
+      ) {
+        return false;
+      }
+      return true;
+    });
+  }
   if (!target?.file) return [];
   return allFindings.filter((finding) => {
     if (String(finding.file) !== String(target.file)) return false;

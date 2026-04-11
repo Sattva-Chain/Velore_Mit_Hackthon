@@ -48,11 +48,19 @@ type CodeSnippet = {
 };
 
 type Secret = {
+	findingId?: string;
+	fingerprint?: string;
+	occurrenceCount?: number;
 	secret: string;
 	type: string;
 	line: number | string;
 	commit: string;
 	branch: string;
+	severity?: string;
+	confidence?: number;
+	ignored?: boolean;
+	ignoreScope?: string | null;
+	locationIndex?: number;
 	snippet?: CodeSnippet | null;
 };
 
@@ -89,6 +97,8 @@ export type ScanResults = {
 	message?: string;
 	clean?: boolean;
 	warnings?: string[];
+	storageFindings?: any[];
+	findings?: any[];
 	remediation?: RemediationMeta;
 };
 
@@ -621,6 +631,7 @@ export default function Analysis() {
 			UnverifiedRepositories: status === "Vulnerable" ? 1 : 0,
 			TotalSecrets: totalSecrets,
 			FilesWithSecrets: data?.summary?.filesWithSecrets ?? 0,
+			SanitizedFindings: data?.storageFindings ?? [],
 		};
 
 		try {
@@ -654,6 +665,9 @@ export default function Analysis() {
 	};
 
 	const buildFindingPayload = (row: { file: string; secret: Secret }) => ({
+		findingId: row.secret.findingId,
+		fingerprint: row.secret.fingerprint,
+		locationIndex: row.secret.locationIndex,
 		file: row.file,
 		secret: row.secret.secret,
 		type: row.secret.type,
@@ -1528,7 +1542,14 @@ export default function Analysis() {
 																	: mask(r.secret.secret)}
 															</td>
 															<td className="px-4 py-3 text-xs text-cyan-400">
-																{r.secret.type}
+																<div className="flex flex-col gap-1">
+																	<span>{r.secret.type}</span>
+																	{r.secret.severity && (
+																		<span className="text-[10px] uppercase text-amber-300">
+																			{r.secret.severity}
+																		</span>
+																	)}
+																</div>
 															</td>
 															<td className="px-4 py-3 text-xs text-slate-400">
 																#{r.secret.line}
@@ -1726,6 +1747,17 @@ export default function Analysis() {
 													Line: <span className="text-cyan-400">{s.line}</span>{" "}
 													• Branch: {s.branch}
 												</p>
+												{(s.severity || s.confidence !== undefined || s.ignored) && (
+													<p className="text-[10px] text-slate-500 mt-2">
+														{s.severity ? `Severity: ${s.severity}` : ""}
+														{s.confidence !== undefined
+															? `${s.severity ? " • " : ""}Confidence: ${s.confidence}`
+															: ""}
+														{s.ignored
+															? `${s.severity || s.confidence !== undefined ? " • " : ""}Ignored${s.ignoreScope ? ` (${s.ignoreScope})` : ""}`
+															: ""}
+													</p>
+												)}
 											</div>
 											<button
 												onClick={() =>

@@ -69,6 +69,18 @@ const Report = () => {
     if (r.vulnerabilities) {
       const secretsFlat = Object.values(r.vulnerabilities).flat();
       setRepoSecrets(secretsFlat);
+    } else if (Array.isArray(r.LastScanFindings) && r.LastScanFindings.length) {
+      const secretsFlat = r.LastScanFindings.flatMap((finding: any) => {
+        const locations = Array.isArray(finding.locations) && finding.locations.length
+          ? finding.locations
+          : [{ filePath: finding.filePath }];
+        return locations.map((location: any) => ({
+          ...finding,
+          type: finding.secretType || finding.type,
+          file: location.filePath || finding.filePath,
+        }));
+      });
+      setRepoSecrets(secretsFlat);
     } else {
       setRepoSecrets([]);
     }

@@ -273,7 +273,8 @@ export const numberkeys = async (req, res) => {
       Status,
       VerifiedRepositories = 0,
       UnverifiedRepositories = 0,
-      TotalSecrets = 0   // ✅ get total secrets from request
+      TotalSecrets = 0,
+      SanitizedFindings = []
     } = req.body;
 
     if (!gitUrl) {
@@ -281,6 +282,47 @@ export const numberkeys = async (req, res) => {
     }
 
     const repoUrl = Array.isArray(gitUrl) ? gitUrl[0] : gitUrl;
+    const persistedFindings = Array.isArray(SanitizedFindings)
+      ? SanitizedFindings.slice(0, 100).map((finding) => ({
+          id: finding?.id || null,
+          fingerprint: finding?.fingerprint || null,
+          secretType: finding?.secretType || finding?.type || "Secret",
+          severity: finding?.severity || "low",
+          confidence:
+            typeof finding?.confidence === "number" ? finding.confidence : null,
+          preview: String(finding?.preview || "Hidden"),
+          filePath: finding?.filePath || null,
+          lineStart:
+            typeof finding?.lineStart === "number" ? finding.lineStart : null,
+          lineEnd:
+            typeof finding?.lineEnd === "number" ? finding.lineEnd : null,
+          ignored: !!finding?.ignored,
+          ignoreScope: finding?.ignoreScope || null,
+          occurrenceCount:
+            typeof finding?.occurrenceCount === "number"
+              ? finding.occurrenceCount
+              : 1,
+          locations: Array.isArray(finding?.locations)
+            ? finding.locations.map((location) => ({
+                filePath: location?.filePath || null,
+                lineStart:
+                  typeof location?.lineStart === "number"
+                    ? location.lineStart
+                    : null,
+                lineEnd:
+                  typeof location?.lineEnd === "number" ? location.lineEnd : null,
+                preview: String(location?.preview || "Hidden"),
+                ignored: !!location?.ignored,
+                ignoreScope: location?.ignoreScope || null,
+                git: location?.git || null,
+              }))
+            : [],
+          storage: {
+            sanitized: true,
+            persisted: true,
+          },
+        }))
+      : [];
 
     let user = await User.findById(userId);
     if (!user) {
@@ -298,7 +340,8 @@ export const numberkeys = async (req, res) => {
       repo.Status = Status;
       repo.VerifiedRepositories = VerifiedRepositories;
       repo.UnverifiedRepositories = UnverifiedRepositories;
-      repo.TotalSecrets = TotalSecrets;  // ✅ update total secrets
+      repo.TotalSecrets = TotalSecrets;
+      repo.LastScanFindings = persistedFindings;
 
       await repo.save();
     } else {
@@ -311,9 +354,9 @@ export const numberkeys = async (req, res) => {
         Status,
         VerifiedRepositories,
         UnverifiedRepositories,
-        TotalSecrets   // ✅ store total secrets
+        TotalSecrets,
+        LastScanFindings: persistedFindings
       });
-      console.log(TotalSecrets)
       newRepoAdded = true;
 
       // ✅ Update user stats only for new repo

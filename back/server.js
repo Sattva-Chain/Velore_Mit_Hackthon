@@ -13,15 +13,19 @@ const {
 	makeWorkspacePath,
 	runTrufflehog,
 	cloneRepo,
+	getGitMetadata,
 	extractZip,
 	cleanupPath,
 	cleanupFile,
 } = require("./services/scanRuntime");
 const {
 	asScanError,
-	DegradedScanError,
 	toApiErrorPayload,
 } = require("./services/scanErrors");
+const { createCanonicalFinding } = require("./services/findingContract");
+const { dedupeCanonicalFindings } = require("./services/findingDeduper");
+const { loadIgnoreConfig, matchIgnoreScope } = require("./services/findingIgnore");
+const { formatLegacyResults } = require("./services/findingFormatter");
 const {
 	createSession,
 	getSession,
@@ -815,17 +819,8 @@ function assignSnippetsByRepoWalk(repoRoot, pendingRows) {
 	walk(realRoot);
 }
 
-async function formatResults(
-	findings = [],
-	repoPath = null,
-	isGitRepo = false,
-) {
-	if (!findings.length) {
-		return {
-			summary: { secretsFound: 0, filesWithSecrets: 0 },
-			vulnerabilities: {},
-		};
-	}
+async function buildFindingOccurrences(findings = [], repoPath = null, isGitRepo = false) {
+	if (!findings.length) return [];
 
 	const rows = [];
 
@@ -856,10 +851,6 @@ async function formatResults(
 			needles.length > 0 ? needles : secret !== "Hidden" ? [secret] : [];
 
 		let line = getFindingLine(f);
-		let commit =
-			f.Commit || f.commit || (sm && (sm.Commit || sm.commit)) || "N/A";
-		const branch = "N/A";
-
 		const parsedLine = parseInt(String(line), 10);
 		let lineForSnippet =
 			Number.isFinite(parsedLine) && parsedLine > 0 ? parsedLine : null;
@@ -876,48 +867,138 @@ async function formatResults(
 		rows.push({
 			file,
 			type,
+			ruleId:
+				f.Rule ||
+				f.rule ||
+				String(type || "secret")
+					.toLowerCase()
+					.replace(/[^a-z0-9]+/g, "_"),
+			reason:
+				f.reason ||
+				f.Reason ||
+				f.VerificationError ||
+				f.DecoderName ||
+				type,
 			secret: String(secret),
 			needles: needlesForSnippet,
 			line,
-			commit,
-			branch,
 			snippet,
+			contextText: readSourceContextLower(repoPath, file, line, 6),
+			source: {
+				engine: "trufflehog",
+				mode: "filesystem",
+				sourceType: isGitRepo ? "git" : "zip",
+			},
+			detectorConfidence:
+				typeof f.DetectorConfidence === "number"
+					? f.DetectorConfidence
+					: typeof f.detectorConfidence === "number"
+						? f.detectorConfidence
+						: null,
+			raw: f,
+			sm,
 		});
 	}
 
 	if (repoPath) {
 		const pending = rows.filter(
-			(r) => !r.snippet && rowNeedleList(r).length > 0,
+			(row) => !row.snippet && rowNeedleList(row).length > 0,
 		);
 		assignSnippetsBasenamePass(repoPath, pending);
 		assignSnippetsByRepoWalk(
 			repoPath,
-			pending.filter((r) => !r.snippet),
+			pending.filter((row) => !row.snippet),
 		);
 	}
 
-	const vulnerabilities = {};
-	const fileSet = new Set();
-	let total = 0;
+	const gitCache = new Map();
+	for (const row of rows) {
+		const parsedLine = parseInt(String(row.line), 10);
+		const lineNumber =
+			Number.isFinite(parsedLine) && parsedLine > 0 ? parsedLine : null;
+		const cacheKey = `${row.file}|${lineNumber || "na"}`;
+		if (!gitCache.has(cacheKey)) {
+			const fallbackCommit =
+				row.raw.Commit ||
+				row.raw.commit ||
+				(row.sm && (row.sm.Commit || row.sm.commit)) ||
+				null;
+			const fallbackBranch = row.raw.Branch || row.raw.branch || null;
+			gitCache.set(
+				cacheKey,
+				isGitRepo && repoPath
+					? await getGitMetadata(repoPath, row.file)
+					: {
+							commit: fallbackCommit,
+							branch: fallbackBranch,
+							ageDays: null,
+							firstSeenDate: null,
+							note: null,
+						},
+			);
+		}
 
-	for (const r of rows) {
-		if (!vulnerabilities[r.file]) vulnerabilities[r.file] = [];
-		vulnerabilities[r.file].push({
-			secret: r.secret,
-			type: r.type,
-			line: r.line,
-			commit: r.commit,
-			branch: r.branch,
-			snippet: r.snippet,
-		});
-		fileSet.add(r.file);
-		total++;
+		row.git = gitCache.get(cacheKey);
+		row.lineStart = lineNumber;
+		row.lineEnd = lineNumber;
 	}
 
-	return {
-		summary: { secretsFound: total, filesWithSecrets: fileSet.size },
-		vulnerabilities,
-	};
+	return rows;
+}
+
+async function buildCanonicalFindings(findings = [], repoPath = null, isGitRepo = false) {
+	const ignoreConfig = loadIgnoreConfig(repoPath);
+	const occurrences = await buildFindingOccurrences(findings, repoPath, isGitRepo);
+
+	const canonical = occurrences.map((occurrence) => {
+		const location = {
+			filePath: occurrence.file,
+			lineStart: occurrence.lineStart,
+			lineEnd: occurrence.lineEnd,
+			preview: null,
+			snippet: occurrence.snippet || null,
+			git: occurrence.git,
+			ignored: false,
+			ignoreScope: null,
+		};
+
+		const finding = createCanonicalFinding({
+			source: occurrence.source,
+			secretType: occurrence.type,
+			filePath: occurrence.file,
+			lineStart: occurrence.lineStart,
+			lineEnd: occurrence.lineEnd,
+			ruleId: occurrence.ruleId,
+			reason: occurrence.reason,
+			rawSecret: occurrence.secret,
+			contextText: occurrence.contextText,
+			detectorConfidence: occurrence.detectorConfidence,
+			detectors: [occurrence.type],
+			locations: [location],
+			git: occurrence.git,
+			remediation: {
+				patchable: true,
+			},
+			storage: {
+				sanitized: false,
+				persisted: false,
+			},
+		});
+
+		const ignoreMatch = matchIgnoreScope(finding, ignoreConfig);
+		finding.ignored = ignoreMatch.ignored;
+		finding.ignoreScope = ignoreMatch.ignoreScope;
+		finding.decision = finding.ignored ? "ignored" : "active";
+		finding.locations = finding.locations.map((item) => ({
+			...item,
+			ignored: ignoreMatch.ignored,
+			ignoreScope: ignoreMatch.ignoreScope,
+			preview: finding.preview,
+		}));
+		return finding;
+	});
+
+	return dedupeCanonicalFindings(canonical);
 }
 
 function withRemediationMeta(formatted, session) {
@@ -955,7 +1036,12 @@ async function prepareScanResponse(findings, repoPath, isGitRepo, warnings = [])
 
 	normalizedFindings = filterEntropyFalsePositives(normalizedFindings, repoPath);
 
-	const formatted = await formatResults(normalizedFindings, repoPath, isGitRepo);
+	const canonicalFindings = await buildCanonicalFindings(
+		normalizedFindings,
+		repoPath,
+		isGitRepo,
+	);
+	const formatted = formatLegacyResults(canonicalFindings);
 	const nextWarnings = buildScanWarnings(warnings);
 	if (nextWarnings.length) {
 		formatted.warnings = nextWarnings;

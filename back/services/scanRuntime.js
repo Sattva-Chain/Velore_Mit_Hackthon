@@ -146,6 +146,94 @@ async function cloneRepo(repoURL, clonePath) {
 	}
 }
 
+async function getGitMetadata(repoPath, filePath) {
+	const gitDir = path.join(repoPath || "", ".git");
+	if (!repoPath || !fs.existsSync(gitDir) || !filePath || filePath === "unknown") {
+		return {
+			commit: null,
+			branch: null,
+			ageDays: null,
+			firstSeenDate: null,
+			note: null,
+		};
+	}
+
+	const relativeFile = String(filePath).replace(/\//g, path.sep);
+
+	let branch = null;
+	try {
+		const { stdout } = await execFileAsync("git", ["rev-parse", "--abbrev-ref", "HEAD"], {
+			cwd: repoPath,
+		});
+		branch = String(stdout || "").trim() || null;
+	} catch {
+		branch = null;
+	}
+
+	try {
+		const { stdout: statusStdout } = await execFileAsync(
+			"git",
+			["status", "--porcelain", "--", relativeFile],
+			{ cwd: repoPath },
+		);
+		if (String(statusStdout || "").trim()) {
+			return {
+				commit: null,
+				branch,
+				ageDays: 0,
+				firstSeenDate: null,
+				note: "uncommitted",
+			};
+		}
+	} catch {
+		// Fall through to log lookup.
+	}
+
+	try {
+		const { stdout } = await execFileAsync(
+			"git",
+			["log", "-1", "--format=%H|%cI", "--", relativeFile],
+			{
+				cwd: repoPath,
+			},
+		);
+		const [commit, firstSeenDate] = String(stdout || "").trim().split("|");
+		if (!commit) {
+			return {
+				commit: null,
+				branch,
+				ageDays: null,
+				firstSeenDate: null,
+				note: null,
+			};
+		}
+
+		let ageDays = null;
+		if (firstSeenDate) {
+			const ageMs = Date.now() - new Date(firstSeenDate).getTime();
+			if (Number.isFinite(ageMs)) {
+				ageDays = Math.max(0, Math.floor(ageMs / (1000 * 60 * 60 * 24)));
+			}
+		}
+
+		return {
+			commit,
+			branch,
+			ageDays,
+			firstSeenDate: firstSeenDate || null,
+			note: null,
+		};
+	} catch {
+		return {
+			commit: null,
+			branch,
+			ageDays: null,
+			firstSeenDate: null,
+			note: null,
+		};
+	}
+}
+
 function extractZip(zipPath, extractPath) {
 	try {
 		fs.mkdirSync(extractPath, { recursive: true });
@@ -185,6 +273,7 @@ module.exports = {
 	makeWorkspacePath,
 	runTrufflehog,
 	cloneRepo,
+	getGitMetadata,
 	extractZip,
 	cleanupPath,
 	cleanupFile,
