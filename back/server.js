@@ -11,9 +11,7 @@ const { default: comp } = require("./models/company");
 const {
 	getRuntimePaths,
 	makeWorkspacePath,
-	runTrufflehog,
 	cloneRepo,
-	getGitMetadata,
 	extractZip,
 	cleanupPath,
 	cleanupFile,
@@ -32,6 +30,7 @@ const {
 	normalizeFingerprint,
 } = require("./services/findingIgnore");
 const { formatLegacyResults } = require("./services/findingFormatter");
+const { executeScanWorkspace: sharedExecuteScanWorkspace } = require("./services/scanPipeline");
 const {
 	createSession,
 	getSession,
@@ -1097,7 +1096,7 @@ app.post("/scan-url", async (req, res) => {
 		await cloneRepo(repoURL, clonePath);
 		console.log("✅ Repo cloned:", clonePath);
 
-		const { formatted } = await executeScanWorkspace({
+		const { formatted } = await sharedExecuteScanWorkspace({
 			repoPath: clonePath,
 			isGitRepo: true,
 		});
@@ -1121,7 +1120,7 @@ app.post("/scan-zip", upload.single("zipfile"), async (req, res) => {
 
 	try {
 		extractZip(zipPath, extractPath);
-		const { formatted } = await executeScanWorkspace({
+		const { formatted } = await sharedExecuteScanWorkspace({
 			repoPath: extractPath,
 			isGitRepo: false,
 		});
@@ -1146,7 +1145,7 @@ app.post("/scan-url-remediation", async (req, res) => {
 	try {
 		await cloneRepo(repoURL, clonePath);
 
-		const { formatted, warnings } = await executeScanWorkspace({
+		const { formatted, warnings } = await sharedExecuteScanWorkspace({
 			repoPath: clonePath,
 			isGitRepo: true,
 		});
@@ -1179,7 +1178,7 @@ app.post(
 
 		try {
 			extractZip(zipPath, extractPath);
-			const { formatted, warnings } = await executeScanWorkspace({
+			const { formatted, warnings } = await sharedExecuteScanWorkspace({
 				repoPath: extractPath,
 				isGitRepo: false,
 			});
@@ -1231,7 +1230,7 @@ app.post("/finding-ignore", async (req, res) => {
 			scope,
 			fingerprint,
 		});
-		const { formatted, warnings } = await executeScanWorkspace({
+		const { formatted, warnings } = await sharedExecuteScanWorkspace({
 			repoPath: session.repoPath,
 			isGitRepo: session.sourceType === "git",
 		});
@@ -1300,7 +1299,7 @@ app.post("/patch/apply", async (req, res) => {
 				});
 
 		const applyResult = applyPatches(session, req.body);
-		const { formatted, warnings } = await executeScanWorkspace({
+		const { formatted, warnings } = await sharedExecuteScanWorkspace({
 			repoPath: session.repoPath,
 			isGitRepo: session.sourceType === "git",
 		});
@@ -1381,7 +1380,7 @@ app.post("/patch/rollback", async (req, res) => {
 				});
 
 		const rollback = await rollbackSession(session, req.body);
-		const { formatted, warnings } = await executeScanWorkspace({
+		const { formatted, warnings } = await sharedExecuteScanWorkspace({
 			repoPath: session.repoPath,
 			isGitRepo: session.sourceType === "git",
 		});

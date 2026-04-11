@@ -3,11 +3,15 @@
   "version": "1.0.0",
   "description": "Desktop UI and server for TruffleHog Secret Scanner",
   "main": "main.js",
+  "bin": {
+    "secure-scan": "./bin/secure-scan.js"
+  },
   "scripts": {
     "start": "node server.js",
     "dev": "nodemon server.js",
     "start:backend": "node backend/server.js",
     "start:electron": "electronmon .",
+    "secure-scan": "node ./bin/secure-scan.js",
     "reinstall": "rimraf ./node_modules package-lock.json && npm install"
   },
   "keywords": [
