@@ -34,6 +34,60 @@ function formatFindingLine(finding) {
 	return `${String(finding.severity || "low").toUpperCase()} ${filePath}:${line} ${finding.secretType}`;
 }
 
+function remapSnapshotFilePath(filePath, snapshotRoot) {
+	const value = String(filePath || "").trim();
+	if (!value || value === "unknown") return value || "unknown";
+	const normalizedSnapshotRoot = String(snapshotRoot || "")
+		.replace(/\\/g, "/")
+		.replace(/\/+$/, "");
+	const normalizedValue = value.replace(/\\/g, "/");
+
+	if (normalizedSnapshotRoot && normalizedValue.startsWith(`${normalizedSnapshotRoot}/`)) {
+		return normalizedValue.slice(normalizedSnapshotRoot.length + 1);
+	}
+
+	if (path.isAbsolute(value)) {
+		const relative = path.relative(snapshotRoot, value);
+		if (relative && !relative.startsWith("..") && !path.isAbsolute(relative)) {
+			return relative.replace(/\\/g, "/");
+		}
+	}
+
+	return normalizedValue;
+}
+
+function remapStagedResultsToRepoPaths(results, snapshotRoot) {
+	if (!results || !snapshotRoot) return results;
+
+	const findings = (results.findings || []).map((finding) => ({
+		...finding,
+		filePath: remapSnapshotFilePath(finding.filePath, snapshotRoot),
+		locations: (finding.locations || []).map((location) => ({
+			...location,
+			filePath: remapSnapshotFilePath(location.filePath, snapshotRoot),
+		})),
+	}));
+
+	const vulnerabilities = {};
+	for (const [filePath, entries] of Object.entries(results.vulnerabilities || {})) {
+		const remappedFilePath = remapSnapshotFilePath(filePath, snapshotRoot);
+		vulnerabilities[remappedFilePath] = (entries || []).map((entry) => ({
+			...entry,
+			file: remapSnapshotFilePath(entry.file, snapshotRoot),
+			locations: (entry.locations || []).map((location) => ({
+				...location,
+				filePath: remapSnapshotFilePath(location.filePath, snapshotRoot),
+			})),
+		}));
+	}
+
+	return {
+		...results,
+		findings,
+		vulnerabilities,
+	};
+}
+
 function printScanSummary({ stdout, findings, warnings = [], stagedFiles = [] }) {
 	const summary = summarizeFindings(findings);
 	if (summary.critical > 0) {
@@ -89,7 +143,11 @@ async function runLocalScan({
 			isGitRepo: false,
 			sourceType: "git",
 		});
-		const findings = activeFindings(formatted);
+		const remappedResults = remapStagedResultsToRepoPaths(
+			formatted,
+			snapshot.snapshotPath,
+		);
+		const findings = activeFindings(remappedResults);
 		const summary = printScanSummary({
 			stdout,
 			findings,
@@ -100,7 +158,7 @@ async function runLocalScan({
 			exitCode: summary.critical > 0 ? 2 : 0,
 			repoRoot: resolvedRepoRoot,
 			stagedFiles: snapshot.stagedFiles,
-			results: formatted,
+			results: remappedResults,
 			summary,
 		};
 	} finally {

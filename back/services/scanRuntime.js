@@ -97,6 +97,44 @@ function safeParseJsonLines(lines) {
 	return results;
 }
 
+function normalizeTrufflehogLogLine(line) {
+	const trimmed = sanitizeExecMessage(line);
+	if (!trimmed) return null;
+
+	try {
+		const parsed = JSON.parse(trimmed);
+		const level = String(parsed?.level || parsed?.Level || "")
+			.trim()
+			.toLowerCase();
+		if (level.startsWith("info")) return null;
+		if (level) {
+			const message =
+				parsed?.msg ||
+				parsed?.message ||
+				parsed?.error ||
+				parsed?.err ||
+				trimmed;
+			return sanitizeExecMessage(message);
+		}
+	} catch {
+		// Fall through to plain-text handling.
+	}
+
+	if (/"level"\s*:\s*"info-[^"]+"/i.test(trimmed)) return null;
+	return trimmed;
+}
+
+function collectTrufflehogWarnings(stderr) {
+	return Array.from(
+		new Set(
+			String(stderr || "")
+				.split(/\r?\n/)
+				.map((line) => normalizeTrufflehogLogLine(line))
+				.filter(Boolean),
+		),
+	);
+}
+
 async function runTrufflehog(scanPath) {
 	const command = resolveTrufflehogCommand();
 	const args = ["filesystem", "--json", scanPath];
@@ -108,16 +146,20 @@ async function runTrufflehog(scanPath) {
 		});
 		return {
 			findings: safeParseJsonLines(stdout),
-			warnings: stderr?.trim() ? [sanitizeExecMessage(stderr)] : [],
+			warnings: collectTrufflehogWarnings(stderr),
 		};
 	} catch (error) {
 		const partialFindings = safeParseJsonLines(error?.stdout || "");
 		if (partialFindings.length > 0) {
+			const stderrWarnings = collectTrufflehogWarnings(error?.stderr || "");
 			return {
 				findings: partialFindings,
 				warnings: [
 					"TruffleHog exited abnormally; partial results were returned.",
-					sanitizeExecMessage(error?.stderr || error?.message || ""),
+					...stderrWarnings,
+					...(stderrWarnings.length
+						? []
+						: [sanitizeExecMessage(error?.message || "")]),
 				].filter(Boolean),
 			};
 		}
