@@ -24,7 +24,13 @@ const {
 } = require("./services/scanErrors");
 const { createCanonicalFinding } = require("./services/findingContract");
 const { dedupeCanonicalFindings } = require("./services/findingDeduper");
-const { loadIgnoreConfig, matchIgnoreScope } = require("./services/findingIgnore");
+const {
+	loadIgnoreConfig,
+	matchIgnoreScope,
+	appendFingerprintIgnoreRule,
+	normalizeScope,
+	normalizeFingerprint,
+} = require("./services/findingIgnore");
 const { formatLegacyResults } = require("./services/findingFormatter");
 const {
 	createSession,
@@ -1194,6 +1200,70 @@ app.post(
 		}
 	},
 );
+
+app.post("/finding-ignore", async (req, res) => {
+	try {
+		const session = getSession(req.body.sessionId);
+		if (!session) {
+			return res.status(404).json({
+				success: false,
+				message: "Scan session not found or expired.",
+			});
+		}
+
+		const scope = normalizeScope(req.body.scope);
+		const fingerprint = normalizeFingerprint(req.body.fingerprint);
+		if (!scope) {
+			return res.status(400).json({
+				success: false,
+				message: "Ignore scope must be 'shared' or 'local'.",
+			});
+		}
+		if (!fingerprint) {
+			return res.status(400).json({
+				success: false,
+				message: "A valid finding fingerprint is required.",
+			});
+		}
+
+		const writeResult = appendFingerprintIgnoreRule({
+			repoPath: session.repoPath,
+			scope,
+			fingerprint,
+		});
+		const { formatted, warnings } = await executeScanWorkspace({
+			repoPath: session.repoPath,
+			isGitRepo: session.sourceType === "git",
+		});
+		updateSessionResults(session.sessionId, formatted);
+
+		return res.json({
+			success: true,
+			message: writeResult.duplicate
+				? "Ignore rule already exists."
+				: scope === "shared"
+					? "Finding ignored for this project."
+					: "Finding ignored locally.",
+			ignore: {
+				scope: writeResult.scope,
+				fingerprint: writeResult.fingerprint,
+				filePath: writeResult.filePath,
+				duplicate: writeResult.duplicate,
+				written: writeResult.written,
+				created: writeResult.created,
+			},
+			results: withDegradedWarnings(
+				withRemediationMeta(formatted, session),
+				warnings,
+			),
+		});
+	} catch (err) {
+		return res.status(500).json({
+			success: false,
+			message: sanitizeErrorMessage(err.message),
+		});
+	}
+});
 
 app.post("/patch/preview", async (req, res) => {
 	try {

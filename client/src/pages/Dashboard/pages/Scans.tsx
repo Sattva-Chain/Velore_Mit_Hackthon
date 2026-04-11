@@ -442,6 +442,7 @@ export default function Analysis() {
 	const [toastMessage, setToastMessage] = useState<string | null>(null);
 	const [openCodeRowKey, setOpenCodeRowKey] = useState<string | null>(null);
 	const [patchBusyKey, setPatchBusyKey] = useState<string | null>(null);
+	const [ignoreBusyKey, setIgnoreBusyKey] = useState<string | null>(null);
 	const [patchPreviews, setPatchPreviews] = useState<PatchPreview[]>([]);
 	const [patchDiff, setPatchDiff] = useState<string>("");
 	const [branchName, setBranchName] = useState<string>(
@@ -711,6 +712,14 @@ export default function Analysis() {
 		};
 	};
 
+	const syncSelectedFileForResults = (nextResults: ScanResults | null) => {
+		if (!selectedFile) return;
+		const remaining = nextResults?.vulnerabilities?.[selectedFile] || [];
+		if (!remaining.length) {
+			setSelectedFile(null);
+		}
+	};
+
 	const buildFindingPayload = (row: { file: string; secret: Secret }) => ({
 		findingId: row.secret.findingId,
 		fingerprint: row.secret.fingerprint,
@@ -885,6 +894,55 @@ export default function Analysis() {
 			logToConsole(`Error: ${message}`);
 		} finally {
 			setPatchBusyKey(null);
+		}
+	};
+
+	const handleIgnoreFinding = async (
+		secret: Secret,
+		scope: "shared" | "local",
+		findingKey: string,
+	) => {
+		if (!patchSessionId) {
+			setToastMessage("Run a scan first before creating an ignore rule.");
+			return;
+		}
+		if (!secret.fingerprint) {
+			setToastMessage("This finding is missing a fingerprint and cannot be ignored.");
+			return;
+		}
+
+		const busyKey = `${findingKey}:${scope}`;
+		setIgnoreBusyKey(busyKey);
+		try {
+			logToConsole(
+				scope === "shared"
+					? `→ Writing project ignore for fingerprint ${secret.fingerprint.slice(0, 12)}...`
+					: `→ Writing local ignore for fingerprint ${secret.fingerprint.slice(0, 12)}...`,
+			);
+			const { data } = await axiosInstance.post("/finding-ignore", {
+				sessionId: patchSessionId,
+				scope,
+				fingerprint: secret.fingerprint,
+			});
+			if (data.results) {
+				setResults(data.results);
+				syncSelectedFileForResults(data.results);
+				setLastCommitSha(data.results.remediation?.lastCommitSha ?? null);
+			}
+			setToastMessage(
+				data.message ||
+					(scope === "shared"
+						? "Finding ignored for this project."
+						: "Finding ignored locally."),
+			);
+			logToConsole("← Ignore rule saved and scan refreshed.");
+		} catch (error: any) {
+			const message =
+				error.response?.data?.message || error.message || "Ignore failed.";
+			setToastMessage(message);
+			logToConsole(`Error: ${message}`);
+		} finally {
+			setIgnoreBusyKey(null);
 		}
 	};
 
@@ -1903,6 +1961,36 @@ export default function Analysis() {
 														? s.commit.substring(0, 12)
 														: "Unknown Commit"}
 											</p>
+										</div>
+										<div className="mt-3 flex flex-wrap gap-2">
+											<button
+												type="button"
+												disabled={
+													!!s.ignored || ignoreBusyKey !== null
+												}
+												onClick={() =>
+													handleIgnoreFinding(s, "local", findingKey)
+												}
+												className="px-3 py-1.5 rounded-lg border border-slate-700 bg-slate-900 text-[10px] font-semibold text-slate-200 hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
+											>
+												{ignoreBusyKey === `${findingKey}:local`
+													? "Ignoring..."
+													: "Ignore locally"}
+											</button>
+											<button
+												type="button"
+												disabled={
+													!!s.ignored || ignoreBusyKey !== null
+												}
+												onClick={() =>
+													handleIgnoreFinding(s, "shared", findingKey)
+												}
+												className="px-3 py-1.5 rounded-lg border border-cyan-500/30 bg-cyan-500/10 text-[10px] font-semibold text-cyan-300 hover:bg-cyan-500/20 disabled:cursor-not-allowed disabled:opacity-50"
+											>
+												{ignoreBusyKey === `${findingKey}:shared`
+													? "Ignoring..."
+													: "Ignore for project"}
+											</button>
 										</div>
 									</div>
 								);

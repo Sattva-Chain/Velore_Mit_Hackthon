@@ -44,6 +44,83 @@ function loadIgnoreConfig(repoPath) {
 	};
 }
 
+function normalizeScope(scope) {
+	const value = String(scope || "").trim().toLowerCase();
+	return value === "shared" || value === "local" ? value : null;
+}
+
+function normalizeFingerprint(fingerprint) {
+	const value = String(fingerprint || "").trim().toLowerCase();
+	return /^[a-f0-9]{64}$/.test(value) ? value : null;
+}
+
+function getIgnoreFilePath(repoPath, scope) {
+	const normalizedScope = normalizeScope(scope);
+	if (!repoPath || !normalizedScope) return null;
+	return path.join(
+		repoPath,
+		normalizedScope === "shared" ? SHARED_IGNORE_FILE : LOCAL_IGNORE_FILE,
+	);
+}
+
+function hasFingerprintRule(filePath, fingerprint, scope) {
+	return loadRulesFromFile(filePath, scope).some(
+		(rule) => rule.type === "fingerprint" && rule.value === fingerprint,
+	);
+}
+
+function appendFingerprintIgnoreRule({ repoPath, scope, fingerprint }) {
+	const normalizedScope = normalizeScope(scope);
+	const normalizedFingerprint = normalizeFingerprint(fingerprint);
+	if (!repoPath) {
+		throw new Error("Repository root is required.");
+	}
+	if (!normalizedScope) {
+		throw new Error("Ignore scope must be 'shared' or 'local'.");
+	}
+	if (!normalizedFingerprint) {
+		throw new Error("A valid finding fingerprint is required.");
+	}
+
+	const filePath = getIgnoreFilePath(repoPath, normalizedScope);
+	if (!filePath) {
+		throw new Error("Unable to resolve ignore file path.");
+	}
+
+	if (hasFingerprintRule(filePath, normalizedFingerprint, normalizedScope)) {
+		return {
+			filePath,
+			fingerprint: normalizedFingerprint,
+			scope: normalizedScope,
+			created: !fs.existsSync(filePath),
+			duplicate: true,
+			written: false,
+		};
+	}
+
+	const existed = fs.existsSync(filePath);
+	let prefix = "";
+	if (existed) {
+		try {
+			const content = fs.readFileSync(filePath, "utf8");
+			if (content.length && !content.endsWith("\n")) prefix = "\n";
+		} catch {
+			prefix = "\n";
+		}
+	}
+
+	fs.appendFileSync(filePath, `${prefix}${normalizedFingerprint}\n`, "utf8");
+
+	return {
+		filePath,
+		fingerprint: normalizedFingerprint,
+		scope: normalizedScope,
+		created: !existed,
+		duplicate: false,
+		written: true,
+	};
+}
+
 function matchesRule(rule, finding) {
 	const filePath = String(finding.filePath || "");
 	switch (rule.type) {
@@ -73,6 +150,11 @@ function matchIgnoreScope(finding, ignoreConfig) {
 }
 
 module.exports = {
+	SHARED_IGNORE_FILE,
+	LOCAL_IGNORE_FILE,
 	loadIgnoreConfig,
 	matchIgnoreScope,
+	appendFingerprintIgnoreRule,
+	normalizeScope,
+	normalizeFingerprint,
 };
