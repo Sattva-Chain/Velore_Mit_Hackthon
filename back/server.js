@@ -19,6 +19,7 @@ const {
   previewPatches,
   applyPatches,
   getGitDiff,
+  buildSessionMeta,
   commitSession,
   rollbackSession,
 } = require("./services/remediation");
@@ -855,10 +856,10 @@ async function formatResults(findings = [], repoPath = null, isGitRepo = false) 
   return { summary: { secretsFound: total, filesWithSecrets: fileSet.size }, vulnerabilities };
 }
 
-function withRemediationMeta(formatted, session) {
+async function withRemediationMeta(formatted, session) {
   return {
     ...formatted,
-    remediation: sessionMeta(session),
+    remediation: await buildSessionMeta(session),
   };
 }
 
@@ -954,7 +955,7 @@ app.post("/scan-url-remediation", async (req, res) => {
       repoUrl: repoURL,
       results: formatted,
     });
-    return res.json(withRemediationMeta(formatted, session));
+    return res.json(await withRemediationMeta(formatted, session));
   } catch (err) {
     try { fs.rmSync(clonePath, { recursive: true, force: true }); } catch {}
     return res.status(500).json({ error: true, message: err.message });
@@ -985,7 +986,7 @@ app.post("/scan-zip-remediation", upload.single("zipfile"), async (req, res) => 
       repoUrl: null,
       results: formatted,
     });
-    return res.json(withRemediationMeta(formatted, session));
+    return res.json(await withRemediationMeta(formatted, session));
   } catch (err) {
     try { fs.rmSync(extractPath, { recursive: true, force: true }); } catch {}
     return res.status(500).json({ error: true, message: err.message });
@@ -999,7 +1000,7 @@ app.post("/patch/preview", async (req, res) => {
     const session = getSession(req.body.sessionId);
     if (!session) return res.status(404).json({ success: false, message: "Patch session not found or expired." });
     const previews = previewPatches(session, req.body);
-    return res.json({ success: true, previews, remediation: sessionMeta(session) });
+    return res.json({ success: true, previews, remediation: await buildSessionMeta(session) });
   } catch (err) {
     return res.status(500).json({ success: false, message: sanitizeErrorMessage(err.message) });
   }
@@ -1027,7 +1028,7 @@ app.post("/patch/apply", async (req, res) => {
       previews: applyResult.previews,
       changedFiles: applyResult.changedFiles,
       diff,
-      results: withRemediationMeta(formatted, session),
+      results: await withRemediationMeta(formatted, session),
     });
   } catch (err) {
     return res.status(500).json({ success: false, message: sanitizeErrorMessage(err.message) });
@@ -1039,7 +1040,7 @@ app.post("/patch/diff", async (req, res) => {
     const session = getSession(req.body.sessionId);
     if (!session) return res.status(404).json({ success: false, message: "Patch session not found or expired." });
     const diff = await getGitDiff(session);
-    return res.json({ success: true, diff, remediation: sessionMeta(session) });
+    return res.json({ success: true, diff, remediation: await buildSessionMeta(session) });
   } catch (err) {
     return res.status(500).json({ success: false, message: sanitizeErrorMessage(err.message) });
   }
@@ -1056,7 +1057,7 @@ app.post("/patch/commit", async (req, res) => {
       success: true,
       commit,
       diff,
-      remediation: sessionMeta(session),
+      remediation: await buildSessionMeta(session),
     });
   } catch (err) {
     return res.status(500).json({ success: false, message: sanitizeErrorMessage(err.message) });
@@ -1084,7 +1085,7 @@ app.post("/patch/rollback", async (req, res) => {
       success: true,
       rollback,
       diff,
-      results: withRemediationMeta(formatted, session),
+      results: await withRemediationMeta(formatted, session),
     });
   } catch (err) {
     return res.status(500).json({ success: false, message: sanitizeErrorMessage(err.message) });

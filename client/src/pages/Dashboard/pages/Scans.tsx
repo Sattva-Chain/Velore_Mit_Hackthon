@@ -57,6 +57,15 @@ type RemediationMeta = {
   repoUrl?: string | null;
   lastCommitSha?: string | null;
   lastBranchName?: string | null;
+  lastPreviewCount?: number;
+  lastReadyPreviewCount?: number;
+  lastAppliedCount?: number;
+  lastOperation?: string;
+  currentBranch?: string | null;
+  pendingChanges?: boolean;
+  changedFiles?: string[];
+  changedFilesCount?: number;
+  canCommitNow?: boolean;
 };
 
 type PatchPreview = {
@@ -120,6 +129,16 @@ const mask = (s: string) => {
   if (s.length <= 10) return s.replace(/.(?=.{2})/g, "*");
   return s.slice(0, 4) + "..." + s.slice(-4);
 };
+
+const normalizeUiError = (message: string) => {
+  if (!message) return "Unknown error";
+  return message
+    .replace(/https:\/\/x-access-token:[^@]+@github\.com\//gi, "https://x-access-token:[REDACTED]@github.com/")
+    .replace(/github_pat_[A-Za-z0-9_]+/g, "github_pat_[REDACTED]");
+};
+
+const stepState = (done: boolean, active: boolean) =>
+  done ? "done" : active ? "active" : "idle";
 
 /** Mask only the leaked substring inside a real source line (GitHub-style preview). */
 const maskSecretInLine = (line: string, secret: string, reveal: boolean) => {
@@ -456,6 +475,7 @@ export default function Analysis() {
 
   const pagedRows = flatRows.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
   const totalPages = Math.max(1, Math.ceil(flatRows.length / PAGE_SIZE));
+  const diffLines = useMemo(() => patchDiff.split(/\r?\n/).filter((line, index, arr) => !(index === arr.length - 1 && line === "")), [patchDiff]);
 
   const sendRepoDetails = async (data: ScanResults) => {
     if (!gitUrl || !user) return;
@@ -490,6 +510,36 @@ export default function Analysis() {
 
   const patchSessionId = results?.remediation?.sessionId ?? null;
   const canUsePatchAgent = !!patchSessionId && !results?.error;
+  const remediation = results?.remediation;
+  const previewReadyCount = remediation?.lastReadyPreviewCount ?? 0;
+  const appliedCount = remediation?.lastAppliedCount ?? 0;
+  const hasPendingChanges = !!remediation?.pendingChanges;
+  const hasCommittedRemediation = !!remediation?.lastCommitSha || !!lastCommitSha;
+  const canCommitNow = !!remediation?.canCommit && !!remediation?.canCommitNow;
+  const canPushNow = !!remediation?.canPush && !!remediation?.canCommitNow;
+  const showShipPanel = hasPendingChanges || hasCommittedRemediation;
+  const workflowSteps = [
+    {
+      label: "Preview",
+      detail: previewReadyCount > 0 ? `${previewReadyCount} fixes ready` : "Generate patch suggestions",
+      state: stepState(previewReadyCount > 0, remediation?.lastOperation === "preview"),
+    },
+    {
+      label: "Apply",
+      detail: appliedCount > 0 ? `${appliedCount} fixes applied` : "Write env-based changes",
+      state: stepState(appliedCount > 0 || hasPendingChanges, remediation?.lastOperation === "apply"),
+    },
+    {
+      label: "Commit",
+      detail: remediation?.lastCommitSha ? "Remediation commit created" : hasPendingChanges ? "Ready to commit" : "Nothing to commit yet",
+      state: stepState(!!remediation?.lastCommitSha, remediation?.lastOperation === "commit"),
+    },
+    {
+      label: "Push",
+      detail: remediation?.lastOperation === "push" ? "Branch pushed" : canPushNow ? "Ready to push" : "Needs commit first",
+      state: stepState(remediation?.lastOperation === "push", remediation?.lastOperation === "push"),
+    },
+  ];
 
   const withRemediationMeta = (nextResults: ScanResults | null, remediation?: RemediationMeta) => {
     if (!nextResults) return nextResults;
@@ -520,7 +570,7 @@ export default function Analysis() {
       const readyCount = (data.previews ?? []).filter((p: PatchPreview) => p.status === "ready").length;
       setToastMessage(`Prepared ${readyCount} patch preview${readyCount === 1 ? "" : "s"}.`);
     } catch (error: any) {
-      const message = error.response?.data?.message || error.message || "Unable to preview patch.";
+      const message = normalizeUiError(error.response?.data?.message || error.message || "Unable to preview patch.");
       setToastMessage(message);
       logToConsole(`Error: ${message}`);
     } finally {
@@ -549,7 +599,7 @@ export default function Analysis() {
       const changedCount = (data.changedFiles ?? []).length;
       setToastMessage(changedCount > 0 ? `Patch applied across ${changedCount} file${changedCount === 1 ? "" : "s"}.` : "Patch applied.");
     } catch (error: any) {
-      const message = error.response?.data?.message || error.message || "Patch failed.";
+      const message = normalizeUiError(error.response?.data?.message || error.message || "Patch failed.");
       setToastMessage(message);
       logToConsole(`Error: ${message}`);
     } finally {
@@ -566,7 +616,7 @@ export default function Analysis() {
       setResults((prev) => withRemediationMeta(prev, data.remediation));
       setToastMessage(data.diff ? "Latest remediation diff loaded." : "No uncommitted remediation diff found.");
     } catch (error: any) {
-      const message = error.response?.data?.message || error.message || "Unable to load diff.";
+      const message = normalizeUiError(error.response?.data?.message || error.message || "Unable to load diff.");
       setToastMessage(message);
       logToConsole(`Error: ${message}`);
     } finally {
@@ -576,6 +626,10 @@ export default function Analysis() {
 
   const handleCommitPatch = async (push: boolean) => {
     if (!patchSessionId) return;
+    if (!hasPendingChanges) {
+      setToastMessage("Apply a patch first. There are no remediation changes waiting to be committed.");
+      return;
+    }
     if (push && !githubToken.trim()) {
       setToastMessage("GitHub token is required before pushing a remediation branch.");
       return;
@@ -600,7 +654,7 @@ export default function Analysis() {
           : `Commit created on ${data.commit?.branchName ?? branchName}.`
       );
     } catch (error: any) {
-      const message = error.response?.data?.message || error.message || "Commit failed.";
+      const message = normalizeUiError(error.response?.data?.message || error.message || "Commit failed.");
       setToastMessage(message);
       logToConsole(`Error: ${message}`);
     } finally {
@@ -627,7 +681,7 @@ export default function Analysis() {
       setLastCommitSha(null);
       setToastMessage("Remediation rollback commit created.");
     } catch (error: any) {
-      const message = error.response?.data?.message || error.message || "Rollback failed.";
+      const message = normalizeUiError(error.response?.data?.message || error.message || "Rollback failed.");
       setToastMessage(message);
       logToConsole(`Error: ${message}`);
     } finally {
@@ -812,22 +866,6 @@ export default function Analysis() {
                 </button>
                 <button
                   type="button"
-                  onClick={() => handleCommitPatch(false)}
-                  disabled={!results.remediation.canCommit || patchBusyKey !== null}
-                  className="px-4 py-2 rounded-lg border border-emerald-500/40 text-xs font-semibold text-emerald-300 hover:bg-emerald-500/10 disabled:opacity-50"
-                >
-                  {patchBusyKey === "commit" ? "Committing..." : "Commit Patch"}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => handleCommitPatch(true)}
-                  disabled={!results.remediation.canPush || patchBusyKey !== null}
-                  className="px-4 py-2 rounded-lg border border-amber-500/40 text-xs font-semibold text-amber-300 hover:bg-amber-500/10 disabled:opacity-50"
-                >
-                  {patchBusyKey === "push" ? "Pushing..." : "Commit & Push"}
-                </button>
-                <button
-                  type="button"
                   onClick={handleRollbackPatch}
                   disabled={!results.remediation.canCommit || !lastCommitSha || patchBusyKey !== null}
                   className="px-4 py-2 rounded-lg border border-rose-500/40 text-xs font-semibold text-rose-300 hover:bg-rose-500/10 disabled:opacity-50"
@@ -837,76 +875,154 @@ export default function Analysis() {
               </div>
             </div>
 
-            <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
-              <div className="xl:col-span-2">
-                <label className="text-[10px] uppercase tracking-widest text-slate-500 font-bold block mb-2">Commit Message</label>
-                <input
-                  type="text"
-                  value={commitMessage}
-                  onChange={(e) => setCommitMessage(e.target.value)}
-                  className="w-full px-4 py-3 rounded-xl bg-[#020617] border border-slate-700 text-sm text-white outline-none focus:border-cyan-500"
-                />
+            <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+              {workflowSteps.map((step) => (
+                <div
+                  key={step.label}
+                  className={`rounded-2xl border p-4 ${
+                    step.state === "done"
+                      ? "border-emerald-500/20 bg-emerald-500/8"
+                      : step.state === "active"
+                      ? "border-cyan-500/30 bg-cyan-500/10"
+                      : "border-slate-800 bg-[#020617]"
+                  }`}
+                >
+                  <p className="text-[10px] uppercase tracking-[0.22em] text-slate-500 font-bold">{step.label}</p>
+                  <p
+                    className={`text-lg font-semibold mt-2 ${
+                      step.state === "done"
+                        ? "text-emerald-300"
+                        : step.state === "active"
+                        ? "text-cyan-300"
+                        : "text-slate-200"
+                    }`}
+                  >
+                    {step.state === "done" ? "Done" : step.state === "active" ? "In Progress" : "Waiting"}
+                  </p>
+                  <p className="text-xs text-slate-500 mt-2">{step.detail}</p>
+                </div>
+              ))}
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+              <div className="rounded-2xl border border-slate-800 bg-[#020617] p-4">
+                <p className="text-[10px] uppercase tracking-[0.22em] text-slate-500 font-bold">Workspace Branch</p>
+                <p className="text-base font-semibold text-white mt-2 font-mono">
+                  {remediation?.currentBranch || remediation?.lastBranchName || "main"}
+                </p>
               </div>
-              <div>
-                <label className="text-[10px] uppercase tracking-widest text-slate-500 font-bold block mb-2">Branch Name</label>
-                <input
-                  type="text"
-                  value={branchName}
-                  onChange={(e) => setBranchName(e.target.value)}
-                  className="w-full px-4 py-3 rounded-xl bg-[#020617] border border-slate-700 text-sm text-white outline-none focus:border-cyan-500"
-                />
+              <div className="rounded-2xl border border-slate-800 bg-[#020617] p-4">
+                <p className="text-[10px] uppercase tracking-[0.22em] text-slate-500 font-bold">Pending Changes</p>
+                <p className={`text-base font-semibold mt-2 ${hasPendingChanges ? "text-amber-300" : "text-slate-400"}`}>
+                  {hasPendingChanges ? `${remediation?.changedFilesCount ?? 0} files ready to commit` : "No uncommitted changes"}
+                </p>
+              </div>
+              <div className="rounded-2xl border border-slate-800 bg-[#020617] p-4">
+                <p className="text-[10px] uppercase tracking-[0.22em] text-slate-500 font-bold">Last Action</p>
+                <p className="text-base font-semibold text-cyan-300 mt-2 capitalize">{remediation?.lastOperation || "scan"}</p>
               </div>
             </div>
 
-            <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
-              <div>
-                <label className="text-[10px] uppercase tracking-widest text-slate-500 font-bold block mb-2">GitHub Token For Push</label>
-                <input
-                  type="password"
-                  value={githubToken}
-                  onChange={(e) => setGithubToken(e.target.value)}
-                  placeholder={
-                    results.remediation.canPush
-                      ? githubTokenLoaded
-                        ? "Auto-loaded on this device if previously saved"
-                        : "Loading saved token..."
-                      : "Push disabled for ZIP workspace"
-                  }
-                  className="w-full px-4 py-3 rounded-xl bg-[#020617] border border-slate-700 text-sm text-white outline-none focus:border-cyan-500"
-                  disabled={!results.remediation.canPush}
-                />
-                <div className="mt-3 flex flex-wrap items-center gap-3">
-                  <label className="inline-flex items-center gap-2 text-xs text-slate-400">
-                    <input
-                      type="checkbox"
-                      checked={saveGithubToken}
-                      onChange={(e) => setSaveGithubToken(e.target.checked)}
-                      className="h-4 w-4 rounded border-slate-600 bg-[#020617] text-cyan-500 focus:ring-cyan-500"
-                    />
-                    Save token locally on this device
-                  </label>
-                  {githubToken && (
+            {showShipPanel && (
+              <div className="rounded-2xl border border-emerald-500/15 bg-[linear-gradient(180deg,rgba(16,185,129,0.07),rgba(2,6,23,0.92))] p-4">
+                <div className="flex flex-col xl:flex-row xl:items-start xl:justify-between gap-4">
+                  <div>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <p className="text-[10px] uppercase tracking-[0.24em] text-emerald-300 font-bold">Ship Fix</p>
+                      <span className={`px-2.5 py-1 rounded-full border text-[10px] font-bold uppercase tracking-[0.2em] ${hasPendingChanges ? "border-emerald-400/20 bg-emerald-500/10 text-emerald-300" : "border-slate-700 bg-slate-900 text-slate-300"}`}>
+                        {hasPendingChanges ? "Ready To Commit" : hasCommittedRemediation ? "Commit Created" : "Waiting"}
+                      </span>
+                    </div>
+                    <p className="text-sm text-slate-300 mt-3 max-w-2xl leading-6">
+                      After patching, review the workspace changes here and then create a remediation commit or push the secure branch to GitHub.
+                    </p>
+                  </div>
+                  <div className="flex flex-wrap gap-2 rounded-2xl border border-emerald-500/10 bg-black/15 p-2">
                     <button
                       type="button"
-                      onClick={() => setGithubToken("")}
-                      className="px-3 py-1.5 rounded-lg border border-slate-700 text-[11px] font-semibold text-slate-300 hover:bg-slate-800"
+                      onClick={() => handleCommitPatch(false)}
+                      disabled={!canCommitNow || patchBusyKey !== null}
+                      className="px-4 py-2 rounded-lg bg-emerald-500 text-black text-xs font-bold hover:bg-emerald-400 disabled:opacity-50"
                     >
-                      Clear token
+                      {patchBusyKey === "commit" ? "Committing..." : "Commit Patch"}
                     </button>
-                  )}
+                    <button
+                      type="button"
+                      onClick={() => handleCommitPatch(true)}
+                      disabled={!canPushNow || patchBusyKey !== null}
+                      className="px-4 py-2 rounded-lg border border-amber-500/40 text-xs font-semibold text-amber-300 hover:bg-amber-500/10 disabled:opacity-50"
+                    >
+                      {patchBusyKey === "push" ? "Pushing..." : "Commit & Push"}
+                    </button>
+                  </div>
                 </div>
               </div>
-              <div className="rounded-2xl border border-slate-800 bg-[#020617] p-4">
-                <p className="text-[10px] uppercase tracking-widest text-slate-500 font-bold">Remediation Notes</p>
-                <p className="text-sm text-slate-300 mt-3">
-                  The patch agent moves detected hardcoded secrets into environment variables, updates <span className="font-mono text-slate-100">.env.example</span>, and keeps real values out of commits.
-                </p>
-                <p className="text-xs text-slate-500 mt-3">
-                  {results.remediation.canPush
-                    ? "For GitHub pushes, we create a remediation branch and only push after you click the button."
-                    : "ZIP scans support preview/apply only. Commit and push stay disabled because there is no Git remote workspace."}
-                </p>
-                <div className="mt-4 grid grid-cols-2 gap-3">
+            )}
+
+            {showShipPanel && (
+              <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
+                <div className="xl:col-span-2">
+                  <label className="text-[10px] uppercase tracking-widest text-slate-500 font-bold block mb-2">Commit Message</label>
+                  <input
+                    type="text"
+                    value={commitMessage}
+                    onChange={(e) => setCommitMessage(e.target.value)}
+                    className="w-full px-4 py-3 rounded-xl bg-[#020617] border border-slate-700 text-sm text-white outline-none focus:border-cyan-500"
+                  />
+                </div>
+                <div>
+                  <label className="text-[10px] uppercase tracking-widest text-slate-500 font-bold block mb-2">Branch Name</label>
+                  <input
+                    type="text"
+                    value={branchName}
+                    onChange={(e) => setBranchName(e.target.value)}
+                    className="w-full px-4 py-3 rounded-xl bg-[#020617] border border-slate-700 text-sm text-white outline-none focus:border-cyan-500"
+                  />
+                </div>
+              </div>
+            )}
+
+            <div className="rounded-2xl border border-slate-800 bg-[#020617] p-4 space-y-4">
+              <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1.4fr)_minmax(280px,0.6fr)] gap-4 items-start">
+                <div>
+                  <label className="text-[10px] uppercase tracking-widest text-slate-500 font-bold block mb-2">GitHub Token For Push</label>
+                  <input
+                    type="password"
+                    value={githubToken}
+                    onChange={(e) => setGithubToken(e.target.value)}
+                    placeholder={
+                      results.remediation.canPush
+                        ? githubTokenLoaded
+                          ? "Auto-loaded on this device if previously saved"
+                          : "Loading saved token..."
+                        : "Push disabled for ZIP workspace"
+                    }
+                    className="w-full px-4 py-3 rounded-xl bg-[#010616] border border-slate-700 text-sm text-white outline-none focus:border-cyan-500 disabled:opacity-50"
+                    disabled={!results.remediation.canPush || !showShipPanel}
+                  />
+                  <div className="mt-3 flex flex-wrap items-center gap-3">
+                    <label className="inline-flex items-center gap-2 text-xs text-slate-400">
+                      <input
+                        type="checkbox"
+                        checked={saveGithubToken}
+                        onChange={(e) => setSaveGithubToken(e.target.checked)}
+                        className="h-4 w-4 rounded border-slate-600 bg-[#020617] text-cyan-500 focus:ring-cyan-500"
+                      />
+                      Save token locally on this device
+                    </label>
+                    {githubToken && (
+                      <button
+                        type="button"
+                        onClick={() => setGithubToken("")}
+                        className="px-3 py-1.5 rounded-lg border border-slate-700 text-[11px] font-semibold text-slate-300 hover:bg-slate-800"
+                      >
+                        Clear token
+                      </button>
+                    )}
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-3">
                   <div className="rounded-xl border border-slate-800 bg-slate-950/60 p-3">
                     <p className="text-[10px] uppercase tracking-widest text-slate-500 font-bold">Patchable</p>
                     <p className="text-lg font-semibold text-white mt-2">{results.remediation.patchable ? "Yes" : "No"}</p>
@@ -918,10 +1034,40 @@ export default function Analysis() {
                     </p>
                   </div>
                 </div>
-                {lastCommitSha && (
-                  <p className="text-xs text-emerald-400 mt-3 font-mono">Last remediation commit: {lastCommitSha}</p>
-                )}
               </div>
+
+              <div className="grid grid-cols-1 xl:grid-cols-3 gap-3">
+                <div className="rounded-xl border border-cyan-500/15 bg-cyan-500/5 p-3 xl:col-span-1">
+                  <p className="text-[10px] uppercase tracking-widest text-cyan-300 font-bold">Push Token Needed</p>
+                  <p className="text-xs text-slate-300 mt-2 leading-5">
+                    Fine-grained token, this repo selected, <span className="font-mono text-white">Contents: Read and write</span>.
+                  </p>
+                </div>
+                <div className="rounded-xl border border-slate-800 bg-slate-950/40 p-3 xl:col-span-1">
+                  <p className="text-[10px] uppercase tracking-widest text-slate-500 font-bold">Workflow</p>
+                  <p className="text-xs text-slate-300 mt-2 leading-5">
+                    Preview, patch, review diff, then commit or push only after approval.
+                  </p>
+                </div>
+                <div className={`rounded-xl border p-3 xl:col-span-1 ${showShipPanel ? hasPendingChanges ? "border-emerald-500/20 bg-emerald-500/8" : "border-cyan-500/20 bg-cyan-500/8" : "border-amber-500/20 bg-amber-500/8"}`}>
+                  <p className={`text-[10px] uppercase tracking-widest font-bold ${showShipPanel ? hasPendingChanges ? "text-emerald-300" : "text-cyan-300" : "text-amber-300"}`}>
+                    {showShipPanel ? hasPendingChanges ? "Ready To Commit" : "Ready To Push" : "Commit Disabled"}
+                  </p>
+                  <p className="text-xs text-slate-300 mt-2 leading-5">
+                    {showShipPanel
+                      ? hasPendingChanges
+                        ? `${remediation?.changedFilesCount ?? 0} changed files are waiting in the remediation workspace.`
+                        : "Patching is complete. Commit has been created, and the next step is pushing the branch."
+                      : hasPendingChanges
+                      ? `${remediation?.changedFilesCount ?? 0} changed files are waiting in the remediation workspace.`
+                      : "Apply a patch first. Commit and push unlock only when real file changes exist."}
+                  </p>
+                </div>
+              </div>
+
+              {lastCommitSha && (
+                <p className="text-xs text-emerald-400 font-mono">Last remediation commit: {lastCommitSha}</p>
+              )}
             </div>
 
             {(patchPreviews.length > 0 || patchDiff) && (
@@ -949,12 +1095,61 @@ export default function Analysis() {
                     </div>
                   )}
                 </div>
-                <div className="rounded-xl border border-slate-800 bg-[#020617] p-4 max-h-80 overflow-auto">
-                  <p className="text-[10px] uppercase tracking-widest text-slate-500 font-bold mb-3">Current Diff</p>
+                <div className="rounded-2xl border border-slate-800 bg-[#020617] overflow-hidden">
+                  <div className="px-4 py-3 border-b border-slate-800 bg-slate-950/70 flex items-center justify-between gap-3">
+                    <div>
+                      <p className="text-[10px] uppercase tracking-widest text-slate-500 font-bold">Current Diff</p>
+                      <p className="text-xs text-slate-500 mt-1">GitHub-style unified diff preview for the current remediation workspace.</p>
+                    </div>
+                    {diffLines.length > 0 && (
+                      <span className="px-2.5 py-1 rounded-full border border-slate-700 text-[10px] font-bold uppercase tracking-[0.18em] text-slate-300">
+                        {diffLines.length} lines
+                      </span>
+                    )}
+                  </div>
                   {patchDiff ? (
-                    <pre className="text-[11px] text-slate-200 font-mono whitespace-pre-wrap break-words">{patchDiff}</pre>
+                    <div className="max-h-96 overflow-auto font-mono text-[11px]">
+                      {diffLines.map((line, index) => {
+                        const isAdd = line.startsWith("+") && !line.startsWith("+++");
+                        const isRemove = line.startsWith("-") && !line.startsWith("---");
+                        const isHunk = line.startsWith("@@");
+                        const isMeta = line.startsWith("diff ") || line.startsWith("index ") || line.startsWith("---") || line.startsWith("+++");
+                        const bgClass = isAdd
+                          ? "bg-emerald-500/10"
+                          : isRemove
+                          ? "bg-rose-500/10"
+                          : isHunk
+                          ? "bg-cyan-500/10"
+                          : "bg-transparent";
+                        const textClass = isAdd
+                          ? "text-emerald-300"
+                          : isRemove
+                          ? "text-rose-300"
+                          : isHunk
+                          ? "text-cyan-300"
+                          : isMeta
+                          ? "text-slate-400"
+                          : "text-slate-200";
+                        const markerClass = isAdd
+                          ? "text-emerald-400"
+                          : isRemove
+                          ? "text-rose-400"
+                          : isHunk
+                          ? "text-cyan-400"
+                          : "text-slate-600";
+
+                        return (
+                          <div key={`${index}-${line}`} className={`grid grid-cols-[56px_1fr] border-b border-slate-900/60 ${bgClass}`}>
+                            <div className={`px-3 py-1.5 text-right select-none ${markerClass}`}>{index + 1}</div>
+                            <div className={`px-3 py-1.5 whitespace-pre-wrap break-words ${textClass}`}>{line || " "}</div>
+                          </div>
+                        );
+                      })}
+                    </div>
                   ) : (
-                    <p className="text-sm text-slate-500">No diff loaded yet. Preview or apply a patch first.</p>
+                    <div className="p-4">
+                      <p className="text-sm text-slate-500">No diff loaded yet. Preview or apply a patch first.</p>
+                    </div>
                   )}
                 </div>
               </div>
