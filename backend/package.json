@@ -1,0 +1,19 @@
+{
+  "name": "navmate-live-backend",
+  "version": "0.2.0",
+  "description": "Voice-first indoor navigation backend for NavMate Live",
+  "main": "src/server.js",
+  "scripts": {
+    "dev": "node --watch src/server.js",
+    "start": "node src/server.js",
+    "seed": "node src/seed/demoSeed.js"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "express": "^4.21.2",
+    "mongoose": "^8.9.5",
+    "morgan": "^1.10.0",
+    "zod": "^3.24.1"
+  }
+}

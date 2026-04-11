@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en" xmlns:th="http://www.thymeleaf.org">
+<head>
+    <meta charset="UTF-8">
+    <title>NavMate Admin</title>
+    <link rel="stylesheet" th:href="@{/css/admin.css}">
+</head>
+<body>
+<main class="layout">
+    <section class="panel">
+        <h1>NavMate Live Admin</h1>
+        <p>Onboard buildings, inspect floor readiness, and watch route-state controls.</p>
+    </section>
+
+    <section class="panel">
+        <h2>Create Building</h2>
+        <form method="post" th:action="@{/admin/buildings}" th:object="${buildingForm}">
+            <label>Code <input th:field="*{code}" required></label>
+            <label>Name <input th:field="*{name}" required></label>
+            <label>Address <input th:field="*{address}" required></label>
+            <button type="submit">Create building</button>
+        </form>
+    </section>
+
+    <section class="panel">
+        <h2>Buildings</h2>
+        <div th:if="${#lists.isEmpty(dashboard.buildings)}">No buildings yet.</div>
+        <ul th:if="${!#lists.isEmpty(dashboard.buildings)}">
+            <li th:each="building : ${dashboard.buildings}">
+                <span th:text="${building.name}"></span>
+                <span th:text="${building.address}"></span>
+                <a th:href="@{|/admin/floors/${building.id}|}">Add floor</a>
+            </li>
+        </ul>
+    </section>
+
+    <section class="panel">
+        <h2>Floors</h2>
+        <table>
+            <thead>
+            <tr>
+                <th>Building</th>
+                <th>Floor</th>
+                <th>Status</th>
+                <th>Nodes</th>
+                <th>Edges</th>
+                <th>Anchors</th>
+            </tr>
+            </thead>
+            <tbody>
+            <tr th:each="floor : ${dashboard.floors}">
+                <td th:text="${floor.buildingName}"></td>
+                <td th:text="${floor.floorName}"></td>
+                <td th:text="${floor.publishStatus}"></td>
+                <td th:text="${floor.nodeCount}"></td>
+                <td th:text="${floor.edgeCount}"></td>
+                <td th:text="${floor.anchorCount}"></td>
+            </tr>
+            </tbody>
+        </table>
+    </section>
+
+    <section class="panel">
+        <h2>Active Route State</h2>
+        <div th:if="${#lists.isEmpty(dashboard.recentRouteStateEvents)}">No active route-state events.</div>
+        <ul th:if="${!#lists.isEmpty(dashboard.recentRouteStateEvents)}">
+            <li th:each="event : ${dashboard.recentRouteStateEvents}">
+                <strong th:text="${event.eventType}"></strong>
+                <span th:text="${event.message}"></span>
+            </li>
+        </ul>
+    </section>
+</main>
+</body>
+</html>

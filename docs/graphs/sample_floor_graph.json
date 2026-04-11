@@ -1,0 +1,50 @@
+{
+  "floorCode": "vision-commons-ground",
+  "floorName": "Ground Floor",
+  "nodes": [
+    { "code": "entrance_main", "name": "Main Entrance", "type": "ENTRANCE", "xMeters": 0, "yMeters": 0, "accessible": true, "entrance": true },
+    { "code": "entrance_east", "name": "East Entrance", "type": "ENTRANCE", "xMeters": 0, "yMeters": 8, "accessible": true, "entrance": true },
+    { "code": "entrance_helpdesk", "name": "Help Desk Entrance", "type": "ENTRANCE", "xMeters": 4, "yMeters": 4, "accessible": true, "entrance": true },
+    { "code": "lobby_junction", "name": "Lobby Junction", "type": "INTERSECTION", "xMeters": 8, "yMeters": 4, "accessible": true },
+    { "code": "help_desk", "name": "Help Desk", "type": "HELP_DESK", "xMeters": 10, "yMeters": 6, "accessible": true, "helpDesk": true },
+    { "code": "registrar_office", "name": "Registrar Office", "type": "ROOM", "xMeters": 16, "yMeters": 8, "accessible": true },
+    { "code": "billing_counter", "name": "Billing Counter", "type": "ROOM", "xMeters": 16, "yMeters": 1, "accessible": true },
+    { "code": "room_204", "name": "Room 204", "type": "ROOM", "xMeters": 23, "yMeters": 8, "accessible": true },
+    { "code": "lift_lobby", "name": "Lift Lobby", "type": "LIFT", "xMeters": 23, "yMeters": 4, "accessible": true, "lift": true },
+    { "code": "resource_lab", "name": "Resource Lab", "type": "ROOM", "xMeters": 23, "yMeters": 0, "accessible": true }
+  ],
+  "edges": [
+    { "from": "entrance_main", "to": "lobby_junction", "distanceMeters": 9, "accessible": true, "anchorCoverageScore": 0.9, "landmarkHint": "Reception ahead" },
+    { "from": "entrance_east", "to": "lobby_junction", "distanceMeters": 8, "accessible": true, "anchorCoverageScore": 0.7, "landmarkHint": "Open lobby on the left" },
+    { "from": "entrance_helpdesk", "to": "help_desk", "distanceMeters": 3, "accessible": true, "anchorCoverageScore": 1.0, "landmarkHint": "Service bell nearby" },
+    { "from": "help_desk", "to": "lobby_junction", "distanceMeters": 3, "accessible": true, "anchorCoverageScore": 0.8, "landmarkHint": "Lobby opens ahead" },
+    { "from": "lobby_junction", "to": "registrar_office", "distanceMeters": 9, "accessible": true, "anchorCoverageScore": 0.7, "landmarkHint": "Registrar hallway" },
+    { "from": "lobby_junction", "to": "billing_counter", "distanceMeters": 8, "accessible": true, "anchorCoverageScore": 0.7, "landmarkHint": "Billing signboard" },
+    { "from": "registrar_office", "to": "room_204", "distanceMeters": 7, "accessible": true, "anchorCoverageScore": 0.6, "landmarkHint": "Room numbers increase" },
+    { "from": "billing_counter", "to": "lift_lobby", "distanceMeters": 7, "accessible": true, "anchorCoverageScore": 0.8, "landmarkHint": "Lift chime nearby" },
+    { "from": "lift_lobby", "to": "room_204", "distanceMeters": 4, "accessible": true, "anchorCoverageScore": 0.9, "landmarkHint": "Room 204 door ahead" },
+    { "from": "lift_lobby", "to": "resource_lab", "distanceMeters": 4, "accessible": true, "anchorCoverageScore": 0.8, "landmarkHint": "Lab equipment sounds" }
+  ],
+  "anchors": [
+    { "token": "ANCHOR-VC-G-MAIN", "label": "Main Entrance Marker", "nodeCode": "entrance_main", "active": true },
+    { "token": "ANCHOR-VC-G-LOBBY", "label": "Lobby Junction Marker", "nodeCode": "lobby_junction", "active": true },
+    { "token": "ANCHOR-VC-G-HELP", "label": "Help Desk Marker", "nodeCode": "help_desk", "active": true },
+    { "token": "ANCHOR-VC-G-LIFT", "label": "Lift Lobby Marker", "nodeCode": "lift_lobby", "active": true }
+  ],
+  "landmarks": [
+    { "title": "Help Desk Counter", "spokenHint": "Help desk is slightly to your left.", "sideHint": "left", "nodeCode": "help_desk" },
+    { "title": "Registrar Signboard", "spokenHint": "The registrar sign is ahead at shoulder height.", "sideHint": "ahead", "nodeCode": "registrar_office" },
+    { "title": "Lift Doors", "spokenHint": "Lift doors are directly ahead.", "sideHint": "ahead", "nodeCode": "lift_lobby" }
+  ],
+  "destinationAliases": [
+    { "alias": "Help Desk", "nodeCode": "help_desk" },
+    { "alias": "Support Desk", "nodeCode": "help_desk" },
+    { "alias": "Registrar Office", "nodeCode": "registrar_office" },
+    { "alias": "Registrar", "nodeCode": "registrar_office" },
+    { "alias": "Billing Counter", "nodeCode": "billing_counter" },
+    { "alias": "Billing", "nodeCode": "billing_counter" },
+    { "alias": "Room 204", "nodeCode": "room_204" },
+    { "alias": "Lab 204", "nodeCode": "room_204" },
+    { "alias": "Lift Lobby", "nodeCode": "lift_lobby" }
+  ]
+}

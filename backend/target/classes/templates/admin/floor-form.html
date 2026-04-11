@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html lang="en" xmlns:th="http://www.thymeleaf.org">
+<head>
+    <meta charset="UTF-8">
+    <title>Create Floor</title>
+    <link rel="stylesheet" th:href="@{/css/admin.css}">
+</head>
+<body>
+<main class="layout narrow">
+    <section class="panel">
+        <h1>Create Floor</h1>
+        <form method="post" th:action="@{|/admin/floors/${buildingId}|}" th:object="${floorForm}">
+            <label>Code <input th:field="*{code}" required></label>
+            <label>Name <input th:field="*{name}" required></label>
+            <label>Level Index <input type="number" th:field="*{levelIndex}" required></label>
+            <label>Floor Plan URL <input th:field="*{floorPlanUrl}"></label>
+            <button type="submit">Create floor</button>
+        </form>
+        <a th:href="@{/admin}">Back to dashboard</a>
+    </section>
+</main>
+</body>
+</html>
