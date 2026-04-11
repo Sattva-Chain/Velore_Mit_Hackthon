@@ -6,7 +6,10 @@
   "type": "module",
   "scripts": {
     "start": "electron .",
-    "dev": "concurrently \"npm:start:backend\" \"npm:start:electron\"",
+    "start:dist": "electron . --dist",
+    "start:vite": "npm run dev --prefix ../client",
+    "start:backend": "node ../back/server.js",
+    "dev": "concurrently -k \"npm run start:vite\" \"npm run start:backend\" \"wait-on http://localhost:5173 -t 120000 && electronmon .\"",
     "start:electron": "electronmon .",
     "reinstall": "rimraf ./node_modules package-lock.json && npm install",
     "dist": "electron-builder"

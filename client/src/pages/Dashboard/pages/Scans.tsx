@@ -1,5 +1,5 @@
 "use client";
-import React, { useState, type FormEvent, useMemo, useEffect } from "react";
+import React, { useState, type FormEvent, useMemo, useEffect, Fragment } from "react";
 import axios from "axios";
 import {
   PieChart,
@@ -31,12 +31,18 @@ declare global {
   }
 }
 
+type CodeSnippet = {
+  lines: { num: number; text: string }[];
+  highlightLine: number;
+};
+
 type Secret = {
   secret: string;
   type: string;
   line: number | string;
   commit: string;
   branch: string;
+  snippet?: CodeSnippet | null;
 };
 
 export type ScanResults = {
@@ -87,6 +93,141 @@ const mask = (s: string) => {
   return s.slice(0, 4) + "..." + s.slice(-4);
 };
 
+/** Mask only the leaked substring inside a real source line (GitHub-style preview). */
+const maskSecretInLine = (line: string, secret: string, reveal: boolean) => {
+  if (reveal || !secret || secret === "Hidden") return line;
+  if (!line.includes(secret)) return line;
+  return line.split(secret).join(mask(secret));
+};
+
+/** VS Code–style editor chrome; inline styles so Electron + file:// always paints correctly. */
+function SourceSnippetView({
+  snippet,
+  secret,
+  reveal,
+  fileTitle,
+}: {
+  snippet: CodeSnippet;
+  secret: string;
+  reveal: boolean;
+  fileTitle?: string;
+}) {
+  const mono = "Consolas, 'Cascadia Code', 'Fira Code', ui-monospace, monospace";
+  const title = fileTitle || "source";
+
+  return (
+    <div
+      style={{
+        borderRadius: 10,
+        overflow: "hidden",
+        border: "1px solid #474747",
+        boxShadow: "0 12px 40px rgba(0,0,0,0.55)",
+      }}
+    >
+      <div
+        style={{
+          height: 36,
+          background: "#3c3c3c",
+          display: "flex",
+          alignItems: "center",
+          paddingLeft: 12,
+          paddingRight: 12,
+          gap: 10,
+          borderBottom: "1px solid #252526",
+        }}
+      >
+        <span style={{ display: "flex", gap: 6, alignItems: "center" }} aria-hidden>
+          <span style={{ width: 10, height: 10, borderRadius: "50%", background: "#ff5f57" }} />
+          <span style={{ width: 10, height: 10, borderRadius: "50%", background: "#febc2e" }} />
+          <span style={{ width: 10, height: 10, borderRadius: "50%", background: "#28c840" }} />
+        </span>
+        <span
+          style={{
+            flex: 1,
+            fontSize: 11,
+            color: "#cccccc",
+            fontFamily: "system-ui, Segoe UI, sans-serif",
+            fontWeight: 500,
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
+          }}
+          title={title}
+        >
+          Code — {title}
+        </span>
+        <span style={{ fontSize: 9, color: "#858585", textTransform: "uppercase", letterSpacing: "0.06em" }}>
+          VS Code
+        </span>
+      </div>
+      <div
+        style={{
+          background: "#1e1e1e",
+          maxHeight: 320,
+          overflow: "auto",
+        }}
+      >
+        {snippet.lines.map((row) => {
+          const isLeak = row.num === snippet.highlightLine;
+          const display = maskSecretInLine(row.text, secret, reveal);
+          const text = display || "\u00a0";
+          return (
+            <div
+              key={row.num}
+              style={{
+                display: "flex",
+                minHeight: "1.55em",
+                background: isLeak ? "rgba(241, 76, 76, 0.14)" : "transparent",
+              }}
+            >
+              <span
+                style={{
+                  width: 48,
+                  flexShrink: 0,
+                  textAlign: "right",
+                  paddingRight: 8,
+                  paddingLeft: 4,
+                  fontFamily: mono,
+                  fontSize: 12,
+                  lineHeight: 1.55,
+                  color: isLeak ? "#f48771" : "#858585",
+                  borderRight: "1px solid #2d2d2d",
+                  background: isLeak ? "rgba(45, 31, 31, 0.85)" : "#1e1e1e",
+                  userSelect: "none",
+                }}
+              >
+                {row.num}
+              </span>
+              <span
+                style={{
+                  flex: 1,
+                  paddingLeft: 12,
+                  paddingRight: 12,
+                  fontFamily: mono,
+                  fontSize: 12,
+                  lineHeight: 1.55,
+                  whiteSpace: "pre",
+                  overflowX: "auto",
+                  color: isLeak ? "#f3e8e8" : "#d4d4d4",
+                }}
+              >
+                {text}
+              </span>
+              {isLeak ? (
+                <span
+                  style={{ width: 3, flexShrink: 0, background: "#f14c4c" }}
+                  title="Secret on this line"
+                  aria-hidden
+                />
+              ) : null}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 const isClean = (r: ScanResults | null) => {
   if (!r) return false;
   if (r.clean !== undefined) return !!r.clean;
@@ -104,6 +245,7 @@ export default function Analysis() {
   const [revealSecrets, setRevealSecrets] = useState<Record<string, boolean>>({});
   const [page, setPage] = useState(1);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const [openCodeRowKey, setOpenCodeRowKey] = useState<string | null>(null);
   const PAGE_SIZE = 6;
 
   const axiosInstance = axios.create({
@@ -127,11 +269,16 @@ export default function Analysis() {
     }
   }, []);
 
+  useEffect(() => {
+    setOpenCodeRowKey(null);
+  }, [page]);
+
   const handleScan = async (scanType: "url" | "zip", payload: any) => {
     setLoading(true);
     setResults(null);
     setConsoleLines([]);
     setSelectedFile(null);
+    setOpenCodeRowKey(null);
     setToastMessage(null);
 
     try {
@@ -479,28 +626,69 @@ export default function Analysis() {
                         <th className="px-4 py-3 font-semibold">Exposed Secret</th>
                         <th className="px-4 py-3 font-semibold">Classification</th>
                         <th className="px-4 py-3 font-semibold">Line</th>
+                        <th className="px-4 py-3 font-semibold">Source</th>
                         <th className="px-4 py-3 font-semibold text-right">Actions</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-800/50">
-                      {pagedRows.map((r, idx) => (
-                        <tr key={`${r.file}-${idx}`} className="hover:bg-slate-800/30 transition-colors">
-                          <td className="px-4 py-3 text-xs text-slate-300 max-w-[150px] truncate" title={r.file}>{r.file.split('/').pop()}</td>
-                          <td className="px-4 py-3 font-mono text-xs text-rose-400">
-                            {revealSecrets[r.file] ? r.secret.secret : mask(r.secret.secret)}
-                          </td>
-                          <td className="px-4 py-3 text-xs text-cyan-400">{r.secret.type}</td>
-                          <td className="px-4 py-3 text-xs text-slate-400">#{r.secret.line}</td>
-                          <td className="px-4 py-3 flex justify-end gap-2">
-                            <button onClick={() => setRevealSecrets((p) => ({ ...p, [r.file]: !p[r.file] }))} className="px-2 py-1 rounded border border-slate-700 hover:bg-slate-800 text-[10px] text-slate-300">
-                              {revealSecrets[r.file] ? 'Hide' : 'Reveal'}
-                            </button>
-                            <button onClick={() => setSelectedFile(r.file)} className="px-2 py-1 rounded bg-cyan-500/10 text-cyan-400 hover:bg-cyan-500/20 text-[10px] font-semibold">
-                              Inspect
-                            </button>
-                          </td>
-                        </tr>
-                      ))}
+                      {pagedRows.map((r, idx) => {
+                        const rowKey = `p${page}-i${idx}`;
+                        const expanded = openCodeRowKey === rowKey;
+                        const hasSnippet = !!(r.secret.snippet && r.secret.snippet.lines?.length);
+                        return (
+                          <Fragment key={rowKey}>
+                            <tr className="hover:bg-slate-800/30 transition-colors">
+                              <td className="px-4 py-3 text-xs text-slate-300 max-w-[150px] truncate" title={r.file}>{r.file.split('/').pop()}</td>
+                              <td className="px-4 py-3 font-mono text-xs text-rose-400">
+                                {revealSecrets[r.file] ? r.secret.secret : mask(r.secret.secret)}
+                              </td>
+                              <td className="px-4 py-3 text-xs text-cyan-400">{r.secret.type}</td>
+                              <td className="px-4 py-3 text-xs text-slate-400">#{r.secret.line}</td>
+                              <td className="px-4 py-3">
+                                <button
+                                  type="button"
+                                  disabled={!hasSnippet}
+                                  onClick={() => setOpenCodeRowKey(expanded ? null : rowKey)}
+                                  className={`px-2 py-1 rounded text-[10px] font-semibold border transition-colors ${
+                                    hasSnippet
+                                      ? expanded
+                                        ? "border-cyan-500 bg-cyan-500/20 text-cyan-300"
+                                        : "border-slate-600 bg-slate-800/80 text-slate-200 hover:border-cyan-500/50"
+                                      : "border-slate-800 text-slate-600 cursor-not-allowed opacity-60"
+                                  }`}
+                                  title={hasSnippet ? "Toggle VS Code–style code context" : "No snippet returned — restart backend after update and rescan"}
+                                >
+                                  {hasSnippet ? (expanded ? "Hide code" : "Show code") : "No preview"}
+                                </button>
+                              </td>
+                              <td className="px-4 py-3 flex justify-end gap-2">
+                                <button type="button" onClick={() => setRevealSecrets((p) => ({ ...p, [r.file]: !p[r.file] }))} className="px-2 py-1 rounded border border-slate-700 hover:bg-slate-800 text-[10px] text-slate-300">
+                                  {revealSecrets[r.file] ? 'Hide' : 'Reveal'}
+                                </button>
+                                <button type="button" onClick={() => setSelectedFile(r.file)} className="px-2 py-1 rounded bg-cyan-500/10 text-cyan-400 hover:bg-cyan-500/20 text-[10px] font-semibold">
+                                  Inspect
+                                </button>
+                              </td>
+                            </tr>
+                            {expanded && (
+                              <tr>
+                                <td colSpan={6} className="p-0 border-t-0">
+                                  <div className="px-4 py-4 bg-[#050810] border-t border-slate-800/80">
+                                    {hasSnippet && r.secret.snippet ? (
+                                      <SourceSnippetView
+                                        snippet={r.secret.snippet}
+                                        secret={r.secret.secret}
+                                        reveal={!!revealSecrets[r.file]}
+                                        fileTitle={r.file.split("/").pop()}
+                                      />
+                                    ) : null}
+                                  </div>
+                                </td>
+                              </tr>
+                            )}
+                          </Fragment>
+                        );
+                      })}
                     </tbody>
                   </table>
                 </div>
@@ -535,7 +723,7 @@ export default function Analysis() {
       {/* Inspect Modal Overlay */}
       {selectedFile && results && results.vulnerabilities && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-[#020617]/80 backdrop-blur-sm p-4">
-          <div className="bg-[#0f172a] border border-slate-700 rounded-2xl w-full max-w-3xl overflow-hidden shadow-2xl flex flex-col max-h-[85vh]">
+          <div className="bg-[#0f172a] border border-slate-700 rounded-2xl w-full max-w-4xl overflow-hidden shadow-2xl flex flex-col max-h-[85vh]">
             <div className="px-6 py-4 border-b border-slate-800 flex justify-between items-center bg-[#020617]">
               <div>
                 <h3 className="text-sm font-bold text-white">File Inspection</h3>
@@ -562,6 +750,21 @@ export default function Analysis() {
                   <div className="bg-black/50 p-3 rounded-lg border border-slate-800 font-mono text-xs overflow-x-auto text-rose-300">
                     {revealSecrets[selectedFile] ? s.secret : mask(s.secret)}
                   </div>
+
+                  {s.snippet && s.snippet.lines?.length > 0 ? (
+                    <div className="mt-4">
+                      <SourceSnippetView
+                        snippet={s.snippet}
+                        secret={s.secret}
+                        reveal={!!revealSecrets[selectedFile]}
+                        fileTitle={selectedFile.split("/").pop()}
+                      />
+                    </div>
+                  ) : (
+                    <p className="mt-3 text-[10px] text-slate-500">
+                      No source preview. Use a ZIP or URL scan with the latest backend, ensure TruffleHog reports a file path and line, and restart <span className="font-mono text-slate-400">node server.js</span>.
+                    </p>
+                  )}
                   
                   <div className="mt-4 pt-4 border-t border-slate-800 flex justify-between items-center text-[10px] text-slate-500">
                     <p>Commit Context</p>

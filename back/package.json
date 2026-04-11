@@ -1,0 +1,44 @@
+{
+  "name": "trufflehog-desktop",
+  "version": "1.0.0",
+  "description": "Desktop UI and server for TruffleHog Secret Scanner",
+  "main": "main.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "nodemon server.js",
+    "start:backend": "node backend/server.js",
+    "start:electron": "electronmon .",
+    "reinstall": "rimraf ./node_modules package-lock.json && npm install"
+  },
+  "keywords": [
+    "trufflehog",
+    "electron",
+    "security",
+    "scanner"
+  ],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@tailwindcss/vite": "^4.1.14",
+    "adm-zip": "^0.5.10",
+    "cors": "^2.8.5",
+    "dotenv": "^17.2.3",
+    "express": "^4.18.2",
+    "multer": "^1.4.5-lts.1",
+    "nodemailer": "^7.0.9",
+    "tailwindcss": "^4.1.14",
+    "tar": "^7.5.1"
+  },
+  "devDependencies": {
+    "bcrypt": "^6.0.0",
+    "concurrently": "^8.2.2",
+    "cookie-parser": "^1.4.7",
+    "electron": "^29.1.4",
+    "electronmon": "^2.0.2",
+    "express": "^5.1.0",
+    "jsonwebtoken": "^9.0.2",
+    "mongoose": "^8.19.0",
+    "nodemon": "^3.1.10",
+    "rimraf": "^5.0.5"
+  }
+}
