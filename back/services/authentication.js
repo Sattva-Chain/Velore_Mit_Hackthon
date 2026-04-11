@@ -1,13 +1,19 @@
-import  jwt  from "jsonwebtoken";
-const secret = "ved@123";
+import jwt from "jsonwebtoken";
+
+const fallbackSecret = "ved@123";
+const secret = process.env.JWT_SECRET || fallbackSecret;
+
+if (!process.env.JWT_SECRET) {
+  console.warn("JWT_SECRET is not set. Falling back to the development signing secret.");
+}
+
 export function createTokenForUser(user) {
   const payload = {
     _id: user._id,
   };
-  const token = jwt.sign(payload, secret);
-  return token;
+  return jwt.sign(payload, secret);
 }
+
 export function validateToken(token) {
-  const payload = jwt.verify(token, secret);
-  return payload;
+  return jwt.verify(token, secret);
 }

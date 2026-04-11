@@ -7,11 +7,12 @@ contextBridge.exposeInMainWorld("electronAPI", {
 	storeGithubToken: (token) => ipcRenderer.invoke("github-token", token),
 	getGithubToken: () => ipcRenderer.invoke("get-github-token"),
 	clearGithubToken: () => ipcRenderer.invoke("clear-github-token"),
-	// 1. Sends the PDF data (base64) to the main process
 	savePDF: (data, filename) => ipcRenderer.send("save-pdf", data, filename),
-	// 2. Receives the success message back from the main process
-	onSavePDFSuccess: (callback) =>
-		ipcRenderer.on("save-pdf-success", (event, arg) => callback(arg)),
+	onSavePDFSuccess: (callback) => {
+		const listener = (event, arg) => callback(arg);
+		ipcRenderer.on("save-pdf-success", listener);
+		return () => ipcRenderer.removeListener("save-pdf-success", listener);
+	},
 });
 
 console.log("Preload script loaded");

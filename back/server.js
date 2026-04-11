@@ -1,16 +1,27 @@
 // server.js
 const express = require("express");
 const multer = require("multer");
-const { execFile } = require("child_process");
-const AdmZip = require("adm-zip");
 const path = require("path");
 const fs = require("fs");
-const util = require("util");
 const cors = require("cors");
 const mongoose = require("mongoose");
 const router = require("./routes/user");
 const { default: user } = require("./models/user");
 const { default: comp } = require("./models/company");
+const {
+	getRuntimePaths,
+	makeWorkspacePath,
+	runTrufflehog,
+	cloneRepo,
+	extractZip,
+	cleanupPath,
+	cleanupFile,
+} = require("./services/scanRuntime");
+const {
+	asScanError,
+	DegradedScanError,
+	toApiErrorPayload,
+} = require("./services/scanErrors");
 const {
 	createSession,
 	getSession,
@@ -23,18 +34,8 @@ const {
 	rollbackSession,
 } = require("./services/remediation");
 
-const execFileAsync = util.promisify(execFile);
 const app = express();
 const PORT = 3000;
-const bundledTrufflehogPath = path.resolve(
-	__dirname,
-	"../electronjs/bin/trufflehog-win.exe",
-);
-const trufflehogCommand =
-	process.env.TRUFFLEHOG_PATH ||
-	(process.platform === "win32" && fs.existsSync(bundledTrufflehogPath)
-		? bundledTrufflehogPath
-		: "trufflehog");
 const mongoUri =
 	process.env.MONGODB_URI ||
 	"mongodb+srv://kr551344:o43CV2CxzEyrBKVj@cluster0.iabyjku.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0";
@@ -64,14 +65,10 @@ mongoose
 
 app.use("/api", router);
 
-// Upload + Temp
-const uploadDir = path.join(__dirname, "uploads");
-const tempDir = path.join(__dirname, "temp");
-if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir);
-if (!fs.existsSync(tempDir)) fs.mkdirSync(tempDir);
+const runtimePaths = getRuntimePaths();
 
 const storage = multer.diskStorage({
-	destination: (req, file, cb) => cb(null, uploadDir),
+	destination: (req, file, cb) => cb(null, runtimePaths.uploads),
 	filename: (req, file, cb) => cb(null, `${Date.now()}-${file.originalname}`),
 });
 const upload = multer({ storage });
@@ -84,17 +81,6 @@ app.get("/userdata", async (req, res) => {
 		success: "data",
 	});
 });
-function safeParseJson(lines) {
-	const results = [];
-	if (!lines) return results;
-	lines.split("\n").forEach((line) => {
-		if (!line.trim()) return;
-		try {
-			results.push(JSON.parse(line));
-		} catch {}
-	});
-	return results;
-}
 
 // ✅ IGNORE PATTERNS (Active Filtering)
 const ignorePatterns = [
@@ -109,26 +95,6 @@ const ignorePatterns = [
 	"README.md",
 	"client/public/vite.svg",
 ];
-
-async function runTrufflehog(scanPath) {
-	const args = ["filesystem", "--json", scanPath];
-	try {
-		const { stdout } = await execFileAsync(trufflehogCommand, args, {
-			maxBuffer: 1024 * 1024 * 80,
-			timeout: 1000 * 60 * 10,
-		});
-		return safeParseJson(stdout);
-	} catch (error) {
-		const parsed = safeParseJson(error.stdout || "");
-		if (parsed.length) return parsed;
-		if (error.code === "ENOENT") {
-			throw new Error(
-				`TruffleHog executable not found. Set TRUFFLEHOG_PATH or place the binary at ${bundledTrufflehogPath}.`,
-			);
-		}
-		throw new Error(error.stderr || error.message || "TruffleHog scan failed");
-	}
-}
 
 function pickSourceMetadata(f) {
 	return f.SourceMetadata || f.source_metadata || f.sourceMetadata || null;
@@ -971,37 +937,85 @@ function sanitizeErrorMessage(value) {
 		.replace(/github_pat_[A-Za-z0-9_]+/g, "github_pat_[REDACTED]");
 }
 
+function buildScanWarnings(warnings = []) {
+	return Array.from(
+		new Set(
+			(Array.isArray(warnings) ? warnings : [])
+				.map((warning) => sanitizeErrorMessage(warning))
+				.filter(Boolean),
+		),
+	);
+}
+
+async function prepareScanResponse(findings, repoPath, isGitRepo, warnings = []) {
+	let normalizedFindings = findings.filter((f) => {
+		const file = getFindingFileKey(f);
+		return !ignorePatterns.some((pattern) => file.includes(pattern));
+	});
+
+	normalizedFindings = filterEntropyFalsePositives(normalizedFindings, repoPath);
+
+	const formatted = await formatResults(normalizedFindings, repoPath, isGitRepo);
+	const nextWarnings = buildScanWarnings(warnings);
+	if (nextWarnings.length) {
+		formatted.warnings = nextWarnings;
+	}
+	return formatted;
+}
+
+async function executeScanWorkspace({ repoPath, isGitRepo }) {
+	const scanOutput = await runTrufflehog(repoPath);
+	const formatted = await prepareScanResponse(
+		scanOutput.findings || [],
+		repoPath,
+		isGitRepo,
+		scanOutput.warnings || [],
+	);
+	return {
+		formatted,
+		warnings: formatted.warnings || [],
+	};
+}
+
+function respondWithScanError(res, error) {
+	const scanError = asScanError(error);
+	const status = scanError.httpStatus || 500;
+	return res.status(status).json(toApiErrorPayload(scanError));
+}
+
+function withDegradedWarnings(payload, warnings = []) {
+	const nextWarnings = buildScanWarnings(warnings);
+	if (!nextWarnings.length) return payload;
+	return {
+		...payload,
+		warnings: nextWarnings,
+	};
+}
+
 // ✅ Repo URL Scan
 app.post("/scan-url", async (req, res) => {
 	const repoURL = (req.body.url || "").trim();
 	if (!repoURL)
 		return res.status(400).json({ error: true, message: "URL required" });
 
-	const clonePath = path.join(tempDir, `${Date.now()}-repo`);
+	const clonePath = makeWorkspacePath("repo");
 	console.log("🔍 Scanning repo:", repoURL);
 
 	try {
-		await execFileAsync("git", ["clone", "--depth", "1", repoURL, clonePath]);
+		await cloneRepo(repoURL, clonePath);
 		console.log("✅ Repo cloned:", clonePath);
 
-		let findings = await runTrufflehog(clonePath);
-
-		// ✅ Filter ignored files
-		findings = findings.filter((f) => {
-			const file = getFindingFileKey(f);
-			return !ignorePatterns.some((pattern) => file.includes(pattern));
+		const { formatted } = await executeScanWorkspace({
+			repoPath: clonePath,
+			isGitRepo: true,
 		});
 
-		findings = filterEntropyFalsePositives(findings, clonePath);
-
-		const formatted = await formatResults(findings, clonePath, true);
+		// ✅ Filter ignored files
 		return res.json(formatted);
 	} catch (err) {
-		return res.status(500).json({ error: true, message: err.message });
+		return respondWithScanError(res, err);
 	} finally {
-		try {
-			fs.rmSync(clonePath, { recursive: true, force: true });
-		} catch {}
+		cleanupPath(clonePath);
 	}
 });
 
@@ -1011,33 +1025,22 @@ app.post("/scan-zip", upload.single("zipfile"), async (req, res) => {
 		return res.status(400).json({ error: true, message: "ZIP file required" });
 
 	const zipPath = req.file.path;
-	const extractPath = path.join(tempDir, `${Date.now()}-zip`);
+	const extractPath = makeWorkspacePath("zip");
 
 	try {
-		fs.mkdirSync(extractPath, { recursive: true });
-		new AdmZip(zipPath).extractAllTo(extractPath);
-
-		let findings = await runTrufflehog(extractPath);
-
-		// ✅ Filter ignored files
-		findings = findings.filter((f) => {
-			const file = getFindingFileKey(f);
-			return !ignorePatterns.some((pattern) => file.includes(pattern));
+		extractZip(zipPath, extractPath);
+		const { formatted } = await executeScanWorkspace({
+			repoPath: extractPath,
+			isGitRepo: false,
 		});
 
-		findings = filterEntropyFalsePositives(findings, extractPath);
-
-		const formatted = await formatResults(findings, extractPath, false);
+		// ✅ Filter ignored files
 		return res.json(formatted);
 	} catch (err) {
-		return res.status(500).json({ error: true, message: err.message });
+		return respondWithScanError(res, err);
 	} finally {
-		try {
-			fs.unlinkSync(zipPath);
-		} catch {}
-		try {
-			fs.rmSync(extractPath, { recursive: true, force: true });
-		} catch {}
+		cleanupFile(zipPath);
+		cleanupPath(extractPath);
 	}
 });
 
@@ -1046,31 +1049,27 @@ app.post("/scan-url-remediation", async (req, res) => {
 	if (!repoURL)
 		return res.status(400).json({ error: true, message: "URL required" });
 
-	const clonePath = path.join(tempDir, `${Date.now()}-repo-remediate`);
+	const clonePath = makeWorkspacePath("repo-remediate");
 
 	try {
-		await execFileAsync("git", ["clone", "--depth", "1", repoURL, clonePath]);
+		await cloneRepo(repoURL, clonePath);
 
-		let findings = await runTrufflehog(clonePath);
-		findings = findings.filter((f) => {
-			const file = getFindingFileKey(f);
-			return !ignorePatterns.some((pattern) => file.includes(pattern));
+		const { formatted, warnings } = await executeScanWorkspace({
+			repoPath: clonePath,
+			isGitRepo: true,
 		});
-		findings = filterEntropyFalsePositives(findings, clonePath);
-
-		const formatted = await formatResults(findings, clonePath, true);
 		const session = createSession({
 			repoPath: clonePath,
 			sourceType: "git",
 			repoUrl: repoURL,
 			results: formatted,
 		});
-		return res.json(withRemediationMeta(formatted, session));
+		return res.json(
+			withDegradedWarnings(withRemediationMeta(formatted, session), warnings),
+		);
 	} catch (err) {
-		try {
-			fs.rmSync(clonePath, { recursive: true, force: true });
-		} catch {}
-		return res.status(500).json({ error: true, message: err.message });
+		cleanupPath(clonePath);
+		return respondWithScanError(res, err);
 	}
 });
 
@@ -1084,36 +1083,28 @@ app.post(
 				.json({ error: true, message: "ZIP file required" });
 
 		const zipPath = req.file.path;
-		const extractPath = path.join(tempDir, `${Date.now()}-zip-remediate`);
+		const extractPath = makeWorkspacePath("zip-remediate");
 
 		try {
-			fs.mkdirSync(extractPath, { recursive: true });
-			new AdmZip(zipPath).extractAllTo(extractPath);
-
-			let findings = await runTrufflehog(extractPath);
-			findings = findings.filter((f) => {
-				const file = getFindingFileKey(f);
-				return !ignorePatterns.some((pattern) => file.includes(pattern));
+			extractZip(zipPath, extractPath);
+			const { formatted, warnings } = await executeScanWorkspace({
+				repoPath: extractPath,
+				isGitRepo: false,
 			});
-			findings = filterEntropyFalsePositives(findings, extractPath);
-
-			const formatted = await formatResults(findings, extractPath, false);
 			const session = createSession({
 				repoPath: extractPath,
 				sourceType: "zip",
 				repoUrl: null,
 				results: formatted,
 			});
-			return res.json(withRemediationMeta(formatted, session));
+			return res.json(
+				withDegradedWarnings(withRemediationMeta(formatted, session), warnings),
+			);
 		} catch (err) {
-			try {
-				fs.rmSync(extractPath, { recursive: true, force: true });
-			} catch {}
-			return res.status(500).json({ error: true, message: err.message });
+			cleanupPath(extractPath);
+			return respondWithScanError(res, err);
 		} finally {
-			try {
-				fs.unlinkSync(zipPath);
-			} catch {}
+			cleanupFile(zipPath);
 		}
 	},
 );
@@ -1153,18 +1144,10 @@ app.post("/patch/apply", async (req, res) => {
 				});
 
 		const applyResult = applyPatches(session, req.body);
-		let findings = await runTrufflehog(session.repoPath);
-		findings = findings.filter((f) => {
-			const file = getFindingFileKey(f);
-			return !ignorePatterns.some((pattern) => file.includes(pattern));
+		const { formatted, warnings } = await executeScanWorkspace({
+			repoPath: session.repoPath,
+			isGitRepo: session.sourceType === "git",
 		});
-		findings = filterEntropyFalsePositives(findings, session.repoPath);
-
-		const formatted = await formatResults(
-			findings,
-			session.repoPath,
-			session.sourceType === "git",
-		);
 		updateSessionResults(session.sessionId, formatted);
 		const diff = await getGitDiff(session);
 
@@ -1173,7 +1156,10 @@ app.post("/patch/apply", async (req, res) => {
 			previews: applyResult.previews,
 			changedFiles: applyResult.changedFiles,
 			diff,
-			results: withRemediationMeta(formatted, session),
+			results: withDegradedWarnings(
+				withRemediationMeta(formatted, session),
+				warnings,
+			),
 		});
 	} catch (err) {
 		return res
@@ -1239,18 +1225,10 @@ app.post("/patch/rollback", async (req, res) => {
 				});
 
 		const rollback = await rollbackSession(session, req.body);
-		let findings = await runTrufflehog(session.repoPath);
-		findings = findings.filter((f) => {
-			const file = getFindingFileKey(f);
-			return !ignorePatterns.some((pattern) => file.includes(pattern));
+		const { formatted, warnings } = await executeScanWorkspace({
+			repoPath: session.repoPath,
+			isGitRepo: session.sourceType === "git",
 		});
-		findings = filterEntropyFalsePositives(findings, session.repoPath);
-
-		const formatted = await formatResults(
-			findings,
-			session.repoPath,
-			session.sourceType === "git",
-		);
 		updateSessionResults(session.sessionId, formatted);
 		const diff = await getGitDiff(session);
 
@@ -1258,7 +1236,10 @@ app.post("/patch/rollback", async (req, res) => {
 			success: true,
 			rollback,
 			diff,
-			results: withRemediationMeta(formatted, session),
+			results: withDegradedWarnings(
+				withRemediationMeta(formatted, session),
+				warnings,
+			),
 		});
 	} catch (err) {
 		return res

@@ -1,33 +1,9 @@
 const { app, BrowserWindow, ipcMain, dialog } = require("electron/main");
 const path = require("path");
 const fs = require("fs");
-
-const storeDir = path.join(__dirname, ".electron-store");
-const storeFile = path.join(storeDir, "secure-scan.json");
-
-function ensureStoreDir() {
-	if (!fs.existsSync(storeDir)) {
-		fs.mkdirSync(storeDir, { recursive: true });
-	}
-}
-
-function readStore() {
-	try {
-		ensureStoreDir();
-		if (!fs.existsSync(storeFile)) return {};
-		return JSON.parse(fs.readFileSync(storeFile, "utf8"));
-	} catch {
-		return {};
-	}
-}
-
-function writeStore(nextState) {
-	ensureStoreDir();
-	fs.writeFileSync(storeFile, JSON.stringify(nextState, null, 2), "utf8");
-}
+const storage = require("./storage");
 
 const indexPath = path.resolve(__dirname, "../client/dist/index.html");
-/** Packaged app, or local run with: npm run start:dist (loads client/dist, no Vite). */
 const useBuiltUi = app.isPackaged || process.argv.includes("--dist");
 
 function createWindow() {
@@ -43,64 +19,56 @@ function createWindow() {
 
 	console.log("--------------------------------------------------");
 	if (useBuiltUi) {
-		if (fs.existsSync(indexPath)) {
-			console.log("🚀 Loading UI from:", indexPath);
-			win.loadFile(indexPath);
-		} else {
+		if (!fs.existsSync(indexPath)) {
 			console.error(
-				"❌ Built UI not found at",
+				"Built UI not found at",
 				indexPath,
 				"- run: npm run build --prefix ../client",
 			);
+			return;
 		}
-	} else {
-		console.log("🚀 Dev mode: loading Vite at http://localhost:5173");
-		win.loadURL("http://localhost:5173").catch((err) => {
-			console.error(
-				"Failed to load dev server. Run from electronjs: npm run dev   (or build client and use npm run start:dist)",
-				err,
-			);
+
+		console.log("Loading UI from:", indexPath);
+		win.loadFile(indexPath).catch((error) => {
+			console.error("Failed to load built UI:", error);
 		});
-		win.webContents.openDevTools({ mode: "detach" });
+		return;
 	}
+
+	console.log("Dev mode: loading Vite at http://localhost:5173");
+	win.loadURL("http://localhost:5173").catch((error) => {
+		console.error(
+			"Failed to load dev server. Run from electronjs: npm run dev   (or build client and use npm run start:dist)",
+			error,
+		);
+	});
+	win.webContents.openDevTools({ mode: "detach" });
 }
 
-/* ------------------------------------------------------------------
-    🔐 AUTH TOKEN STORAGE HANDLERS
------------------------------------------------------------------- */
 ipcMain.handle("company-token", (event, token) => {
-	const state = readStore();
-	state.companyToken = token;
-	writeStore(state);
-	return true;
+	return storage.setValue("companyToken", token);
 });
 
 ipcMain.handle("get-token", () => {
-	return readStore().companyToken ?? null;
+	return storage.getValue("companyToken");
 });
 
 ipcMain.handle("clear-token", () => {
-	store.delete("companyToken");
-	return true;
+	return storage.deleteValue("companyToken");
 });
 
 ipcMain.handle("github-token", (event, token) => {
-	store.set("githubToken", token);
-	return true;
+	return storage.setValue("githubToken", token);
 });
 
 ipcMain.handle("get-github-token", () => {
-	return store.get("githubToken");
+	return storage.getValue("githubToken");
 });
 
 ipcMain.handle("clear-github-token", () => {
-	store.delete("githubToken");
-	return true;
+	return storage.deleteValue("githubToken");
 });
 
-/* ------------------------------------------------------------------
-    📄 PDF SAVE HANDLER
------------------------------------------------------------------- */
 ipcMain.on("save-pdf", async (event, pdfDataUri, defaultFilename) => {
 	try {
 		const win = BrowserWindow.getFocusedWindow();
@@ -111,21 +79,22 @@ ipcMain.on("save-pdf", async (event, pdfDataUri, defaultFilename) => {
 
 		if (!filePath) return;
 
-		const base64Data = pdfDataUri.split("base64,")[1];
+		const base64Data = String(pdfDataUri || "").split("base64,")[1];
+		if (!base64Data) {
+			throw new Error("Invalid PDF payload.");
+		}
+
 		fs.writeFileSync(filePath, Buffer.from(base64Data, "base64"));
 
 		event.sender.send("save-pdf-success", {
 			message: `Saved to: ${path.basename(filePath)}`,
-			filePath: filePath,
+			filePath,
 		});
-	} catch (err) {
-		dialog.showErrorBox("Save Error", err.message);
+	} catch (error) {
+		dialog.showErrorBox("Save Error", error.message);
 	}
 });
 
-/* ------------------------------------------------------------------
-    🚀 APP BOOT
------------------------------------------------------------------- */
 app.whenReady().then(createWindow);
 
 app.on("window-all-closed", () => {

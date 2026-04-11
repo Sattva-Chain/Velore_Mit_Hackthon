@@ -37,7 +37,7 @@ declare global {
 			savePDF: (data: string, filename: string) => void;
 			onSavePDFSuccess: (
 				callback: (args: { message: string; filePath: string }) => void,
-			) => void;
+			) => void | (() => void);
 		};
 	}
 }
@@ -84,8 +84,11 @@ export type ScanResults = {
 	summary?: { secretsFound: number; filesWithSecrets: number };
 	vulnerabilities?: Record<string, Secret[]>;
 	error?: boolean;
+	code?: string;
+	kind?: string;
 	message?: string;
 	clean?: boolean;
+	warnings?: string[];
 	remediation?: RemediationMeta;
 };
 
@@ -419,7 +422,10 @@ export default function Analysis() {
 					`Download Complete: Report saved to ${args.filePath.split(/[\\/]/).pop()}`,
 				);
 			};
-			window.electronAPI.onSavePDFSuccess(handleSuccess);
+			const unsubscribe = window.electronAPI.onSavePDFSuccess(handleSuccess);
+			return () => {
+				if (typeof unsubscribe === "function") unsubscribe();
+			};
 		}
 	}, []);
 
@@ -503,6 +509,9 @@ export default function Analysis() {
 			const scanResults: ScanResults = response.data;
 			setResults(scanResults);
 			setLastCommitSha(scanResults.remediation?.lastCommitSha ?? null);
+			(scanResults.warnings ?? []).forEach((warning) => {
+				logToConsole(`Warning: ${warning}`);
+			});
 			await sendRepoDetails(scanResults);
 
 			const secretsFound = scanResults.summary?.secretsFound ?? 0;
@@ -512,11 +521,25 @@ export default function Analysis() {
 					? "✅ Scan Complete! Your repository appears safe and clean."
 					: `⚠️ Detected ${secretsFound} vulnerabilities across ${scanResults.summary!.filesWithSecrets} files.`;
 
-			setToastMessage(message);
+			setToastMessage(
+				scanResults.warnings?.length
+					? `${message} (${scanResults.warnings.length} warning${scanResults.warnings.length === 1 ? "" : "s"})`
+					: message,
+			);
 		} catch (error: any) {
 			const message =
 				error.response?.data?.message || error.message || "Unknown error";
-			setResults({ error: true, message });
+			const warnings = error.response?.data?.warnings ?? [];
+			setResults({
+				error: true,
+				message,
+				code: error.response?.data?.code,
+				kind: error.response?.data?.kind,
+				warnings,
+			});
+			warnings.forEach((warning: string) => {
+				logToConsole(`Warning: ${warning}`);
+			});
 			logToConsole(`Error: ${message}`);
 			setToastMessage(`Scan failed: ${message}`);
 		} finally {
