@@ -1,0 +1,59 @@
+{
+  "name": "trufflehog-desktop",
+  "version": "1.0.0",
+  "description": "Desktop UI and server for TruffleHog Secret Scanner",
+  "main": "main.js",
+  "type": "module",
+  "scripts": {
+    "start": "electron .",
+    "dev": "concurrently \"npm:start:backend\" \"npm:start:electron\"",
+    "start:electron": "electronmon .",
+    "reinstall": "rimraf ./node_modules package-lock.json && npm install",
+    "dist": "electron-builder"
+  },
+  "build": {
+    "appId": "com.trufflehog.desktop",
+    "productName": "TruffleHogDesktop",
+    "directories": {
+      "output": "dist_electron"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "node_modules/**/*",
+      "../client/dist/**/*"
+    ],
+    "win": {
+      "target": "nsis",
+      "icon": "icon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    }
+  },
+  "keywords": [
+    "trufflehog",
+    "electron",
+    "security",
+    "scanner"
+  ],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "adm-zip": "^0.5.10",
+    "cors": "^2.8.5",
+    "electron-store": "^11.0.2",
+    "express": "^4.18.2",
+    "multer": "^1.4.5-lts.1",
+    "tar": "^7.5.1"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2",
+    "electron": "^29.1.4",
+    "electron-builder": "^24.13.3",
+    "electronmon": "^2.0.2",
+    "rimraf": "^5.0.5",
+    "wait-on": "^9.0.4"
+  }
+}

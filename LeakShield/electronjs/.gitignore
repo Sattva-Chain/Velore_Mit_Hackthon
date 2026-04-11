@@ -1,0 +1,30 @@
+node_modules
+
+trufflehog
+
+dist 
+
+dist_electron
+
+bin/*.exe
+
+# Dependencies
+node_modules/
+electronjs/node_modules/
+
+# Binaries (THE MOST IMPORTANT LINE)
+electronjs/bin/*.exe
+electronjs/bin/trufflehog-win.exe
+
+# Build outputs
+dist/
+electronjs/dist_electron/
+
+# Temp files
+electronjs/temp/
+electronjs/uploads/
+*.log
+
+# OS files
+.DS_Store
+Thumbs.db
