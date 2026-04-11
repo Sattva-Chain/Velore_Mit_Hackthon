@@ -7,8 +7,8 @@ node_modules/
 dist/
 build/
 .env
-electronjs\bin
-electronjs\.electron-store
+electronjs/bin/
+electronjs/.electron-store
 back/uploads/
 *.zip.cache/
 cache/
