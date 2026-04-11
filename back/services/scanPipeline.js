@@ -1,6 +1,7 @@
 const fs = require("fs");
 const path = require("path");
 const { runTrufflehog, getGitMetadata } = require("./scanRuntime");
+const { runCustomDetectors } = require("./customDetectors");
 const { createCanonicalFinding } = require("./findingContract");
 const { dedupeCanonicalFindings } = require("./findingDeduper");
 const { loadIgnoreConfig, matchIgnoreScope } = require("./findingIgnore");
@@ -750,7 +751,13 @@ async function buildFindingOccurrences(
 			snippet,
 			contextText: readSourceContextLower(repoPath, file, line, 6),
 			source: {
-				engine: "trufflehog",
+				engine: String(
+					f.Provider ||
+						f.provider ||
+						f.Engine ||
+						f.engine ||
+						"trufflehog",
+				).toLowerCase(),
 				mode: "filesystem",
 				sourceType: sourceType || (isGitRepo ? "git" : "zip"),
 			},
@@ -922,9 +929,12 @@ async function prepareScanResponse(
 }
 
 async function executeScanWorkspace({ repoPath, isGitRepo, sourceType = null }) {
-	const scanOutput = await runTrufflehog(repoPath);
+	const [scanOutput, customFindings] = await Promise.all([
+		runTrufflehog(repoPath),
+		runCustomDetectors(repoPath),
+	]);
 	const formatted = await prepareScanResponse(
-		scanOutput.findings || [],
+		[...(scanOutput.findings || []), ...(customFindings || [])],
 		repoPath,
 		isGitRepo,
 		scanOutput.warnings || [],
