@@ -12,7 +12,7 @@ async function startServer() {
 
   app.listen(port, () => {
     // eslint-disable-next-line no-console
-    console.log(`NavMate backend running on port ${port}`);
+    console.log(`NavMate backend running on ports ${port}`);
   });
 }
 
