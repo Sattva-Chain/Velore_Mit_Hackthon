@@ -1,5 +1,6 @@
 const fs = require("fs");
 const path = require("path");
+const fsp = fs.promises;
 const {
 	hasLiteralSecretEvidence,
 	isReferenceLike,
@@ -25,6 +26,7 @@ const SKIP_DIRS = new Set([
 
 const MAX_FILE_BYTES = 1024 * 1024;
 const MAX_TOTAL_FILES = 12000;
+const DETECTOR_FILE_CONCURRENCY = 8;
 
 const PRIVATE_KEY_HEADER_RE =
 	/^-----BEGIN (?:RSA |DSA |EC |OPENSSH |PGP |ENCRYPTED )?PRIVATE KEY-----$/m;
@@ -326,65 +328,90 @@ function collectFileFindings(text, relativePath) {
 	];
 }
 
-function walkWorkspace(rootPath, onFile) {
+async function walkWorkspace(rootPath) {
 	let filesVisited = 0;
+	const pendingDirs = [rootPath];
+	const files = [];
 
-	function walk(dirPath) {
-		if (filesVisited >= MAX_TOTAL_FILES) return;
+	while (pendingDirs.length > 0 && filesVisited < MAX_TOTAL_FILES) {
+		const dirPath = pendingDirs.pop();
 		let entries = [];
 		try {
-			entries = fs.readdirSync(dirPath, { withFileTypes: true });
+			entries = await fsp.readdir(dirPath, { withFileTypes: true });
 		} catch {
-			return;
+			continue;
 		}
 
 		for (const entry of entries) {
-			if (filesVisited >= MAX_TOTAL_FILES) return;
+			if (filesVisited >= MAX_TOTAL_FILES) return files;
 			const fullPath = path.join(dirPath, entry.name);
 			if (entry.isDirectory()) {
 				if (shouldSkipDir(entry.name)) continue;
-				walk(fullPath);
+				pendingDirs.push(fullPath);
 				continue;
 			}
 			if (!entry.isFile()) continue;
 			filesVisited++;
-			onFile(fullPath);
+			files.push(fullPath);
 		}
 	}
 
-	walk(rootPath);
+	return files;
+}
+
+async function mapWithConcurrency(items, limit, worker) {
+	const list = Array.isArray(items) ? items : [];
+	if (!list.length) return [];
+	const results = new Array(list.length);
+	let nextIndex = 0;
+
+	async function runWorker() {
+		while (true) {
+			const index = nextIndex;
+			nextIndex += 1;
+			if (index >= list.length) return;
+			results[index] = await worker(list[index], index);
+		}
+	}
+
+	const workerCount = Math.min(Math.max(1, limit || 1), list.length);
+	await Promise.all(Array.from({ length: workerCount }, () => runWorker()));
+	return results;
 }
 
 async function runCustomDetectors(scanPath) {
-	const findings = [];
 	const rootPath = path.resolve(scanPath);
+	const files = await walkWorkspace(rootPath);
+	const findingGroups = await mapWithConcurrency(
+		files,
+		DETECTOR_FILE_CONCURRENCY,
+		async (fullPath) => {
+			const relativePath = normalizePath(path.relative(rootPath, fullPath));
+			if (!relativePath || relativePath.startsWith("..")) return [];
+			if (!isLikelyTextFile(relativePath)) return [];
 
-	walkWorkspace(rootPath, (fullPath) => {
-		const relativePath = normalizePath(path.relative(rootPath, fullPath));
-		if (!relativePath || relativePath.startsWith("..")) return;
-		if (!isLikelyTextFile(relativePath)) return;
+			let stat;
+			try {
+				stat = await fsp.stat(fullPath);
+			} catch {
+				return [];
+			}
+			if (!stat.isFile() || stat.size > MAX_FILE_BYTES) return [];
 
-		let stat;
-		try {
-			stat = fs.statSync(fullPath);
-		} catch {
-			return;
-		}
-		if (!stat.isFile() || stat.size > MAX_FILE_BYTES) return;
+			let buffer;
+			try {
+				buffer = await fsp.readFile(fullPath);
+			} catch {
+				return [];
+			}
+			if (looksBinary(buffer)) return [];
 
-		let buffer;
-		try {
-			buffer = fs.readFileSync(fullPath);
-		} catch {
-			return;
-		}
-		if (looksBinary(buffer)) return;
+			const text = buffer.toString("utf8");
+			return collectFileFindings(text, relativePath);
+		},
+	);
 
-		const text = buffer.toString("utf8");
-		findings.push(...collectFileFindings(text, relativePath));
-	});
-
-	return findings;
+	return findingGroups.flat();
 }
 
 module.exports = {

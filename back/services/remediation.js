@@ -565,27 +565,60 @@ function ensureBootstrapForPreview(absPath, preview) {
   }
 }
 
+function groupPreviewsByFile(previews) {
+  const grouped = new Map();
+  for (const preview of previews) {
+    const key = String(preview.file || "");
+    if (!key) continue;
+    if (!grouped.has(key)) grouped.set(key, []);
+    grouped.get(key).push(preview);
+  }
+  return grouped;
+}
+
 function applyPatches(session, payload = {}) {
   const previews = previewPatches(session, payload);
   const ready = previews.filter((preview) => preview.status === "ready");
   const changedFiles = new Set();
   const filesNeedingBootstrap = [];
+  const groupedByFile = groupPreviewsByFile(ready);
 
-  for (const preview of ready) {
-    const absPath = resolveRepoFile(session.repoPath, preview.file);
+  for (const [file, filePreviews] of groupedByFile.entries()) {
+    const absPath = resolveRepoFile(session.repoPath, file);
     if (!absPath || !fs.existsSync(absPath)) continue;
-    const lines = fs.readFileSync(absPath, "utf8").split(/\r?\n/);
-    const idx = findLineIndex(lines, preview);
-    if (idx < 0 || idx >= lines.length) continue;
-    lines[idx] = preview.newLine;
+
+    let lines;
+    try {
+      lines = fs.readFileSync(absPath, "utf8").split(/\r?\n/);
+    } catch {
+      continue;
+    }
+
+    let changed = false;
+    for (const preview of filePreviews) {
+      const idx = findLineIndex(lines, preview);
+      if (idx < 0 || idx >= lines.length) continue;
+      if (lines[idx] === preview.newLine) continue;
+      lines[idx] = preview.newLine;
+      changed = true;
+      if (!isEnvFile(preview.file) && preview.bootstrapKind) {
+        filesNeedingBootstrap.push({ absPath, file: preview.file, preview });
+      }
+    }
+
+    if (!changed) continue;
     fs.writeFileSync(absPath, `${lines.join("\n")}\n`, "utf8");
-    changedFiles.add(preview.file);
-    if (!isEnvFile(preview.file) && preview.bootstrapKind) {
-      filesNeedingBootstrap.push({ absPath, file: preview.file, preview });
+    changedFiles.add(file);
+  }
+
+  const bootstrapsByFile = new Map();
+  for (const item of filesNeedingBootstrap) {
+    if (!bootstrapsByFile.has(item.file)) {
+      bootstrapsByFile.set(item.file, item);
     }
   }
 
-  for (const item of filesNeedingBootstrap) {
+  for (const item of bootstrapsByFile.values()) {
     if (ensureBootstrapForPreview(item.absPath, item.preview)) {
       changedFiles.add(path.relative(session.repoPath, item.absPath).replace(/\\/g, "/"));
     }

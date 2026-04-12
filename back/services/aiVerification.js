@@ -13,6 +13,17 @@ const {
 const AI_ANALYZE_URL =
 	process.env.SECURE_SCAN_AI_URL ||
 	"https://secure-scan-ai-risk.onrender.com/analyze";
+const ANALYZER_TIMEOUT_MS = Math.max(
+	1000,
+	parseInt(String(process.env.SECURE_SCAN_AI_TIMEOUT_MS || "5000"), 10) || 5000,
+);
+const VERIFY_CONCURRENCY = Math.max(
+	1,
+	Math.min(
+		8,
+		parseInt(String(process.env.SECURE_SCAN_VERIFY_CONCURRENCY || "4"), 10) || 4,
+	),
+);
 
 function titleCaseWords(value) {
 	return String(value || "")
@@ -144,6 +155,54 @@ function buildBackendConfidenceAnalysis(
 	};
 }
 
+function isDeterministicCriticalCandidate(finding, candidate) {
+	const evaluationInput = {
+		rawSecret: String(candidate || "").trim(),
+		secretType:
+			finding?.DetectorName ||
+			finding?.detectorName ||
+			finding?.DetectorType ||
+			finding?.detectorType ||
+			"",
+		filePath:
+			finding?.ExtraData?.file ||
+			finding?.extraData?.file ||
+			finding?.SourceMetadata?.Data?.Filesystem?.file ||
+			"",
+		contextText: "",
+	};
+	return (
+		isPrivateKey(evaluationInput) ||
+		isDatabaseUrlWithPassword(evaluationInput) ||
+		hasStrongProviderPrefix(evaluationInput)
+	);
+}
+
+function verificationCacheKey(candidate, entropyOnly) {
+	return `${entropyOnly ? "entropy" : "default"}:${String(candidate || "").trim()}`;
+}
+
+async function mapWithConcurrency(items, limit, worker) {
+	const list = Array.isArray(items) ? items : [];
+	if (!list.length) return [];
+
+	const results = new Array(list.length);
+	let nextIndex = 0;
+
+	async function runWorker() {
+		while (true) {
+			const index = nextIndex;
+			nextIndex += 1;
+			if (index >= list.length) return;
+			results[index] = await worker(list[index], index);
+		}
+	}
+
+	const workerCount = Math.min(Math.max(1, limit || 1), list.length);
+	await Promise.all(Array.from({ length: workerCount }, () => runWorker()));
+	return results;
+}
+
 async function analyzeCandidateWithAi(candidate) {
 	const text = String(candidate || "").trim();
 	if (!text || text === "Hidden" || text.length < 6) {
@@ -152,11 +211,18 @@ async function analyzeCandidateWithAi(candidate) {
 
 	try {
 		if (typeof fetch === "function") {
+			const controller =
+				typeof AbortController === "function" ? new AbortController() : null;
+			const timeoutId = controller
+				? setTimeout(() => controller.abort(), ANALYZER_TIMEOUT_MS)
+				: null;
 			const response = await fetch(AI_ANALYZE_URL, {
 				method: "POST",
 				headers: { "Content-Type": "text/plain" },
 				body: text,
+				signal: controller?.signal,
 			});
+			if (timeoutId) clearTimeout(timeoutId);
 			if (response.ok) {
 				const data = await response.json();
 				if (data && typeof data === "object") {
@@ -181,7 +247,10 @@ async function analyzeCandidateWithAi(candidate) {
 		return {
 			result: null,
 			transport: "remote-error",
-			error: error?.message || "Remote analyzer request failed.",
+			error:
+				error?.name === "AbortError"
+					? `Remote analyzer timed out after ${ANALYZER_TIMEOUT_MS}ms.`
+					: error?.message || "Remote analyzer request failed.",
 		};
 	}
 
@@ -237,6 +306,9 @@ async function analyzeCandidateWithAi(candidate) {
 					});
 				},
 			);
+			request.setTimeout(ANALYZER_TIMEOUT_MS, () => {
+				request.destroy(new Error(`Remote analyzer timed out after ${ANALYZER_TIMEOUT_MS}ms.`));
+			});
 			request.on("error", (error) =>
 				resolve({
 					result: null,
@@ -282,8 +354,9 @@ async function enrichFindingsWithVerification(
 		return { findings: [], meta };
 	}
 
-	const enriched = [];
-	for (const finding of findings) {
+	const tasks = [];
+	const seenTaskKeys = new Set();
+	const entries = findings.map((finding) => {
 		const needles = collectSecretNeedles ? collectSecretNeedles(finding) : [];
 		const candidate = pickPrimarySecret
 			? pickPrimarySecret(finding, needles)
@@ -291,14 +364,53 @@ async function enrichFindingsWithVerification(
 		const entropyOnly = detectorIsEntropyOnly
 			? detectorIsEntropyOnly(finding)
 			: false;
-
-		const remote = await analyzeCandidateWithAi(candidate);
-		let verification = remote.result;
-		if (!verification) {
-			verification = buildBackendConfidenceAnalysis(finding, candidate, {
+		const deterministic = isDeterministicCriticalCandidate(finding, candidate);
+		const key = verificationCacheKey(candidate, entropyOnly);
+		if (!seenTaskKeys.has(key)) {
+			seenTaskKeys.add(key);
+			tasks.push({
+				key,
+				candidate,
 				entropyOnly,
+				deterministic,
+				finding,
+			});
+		}
+		return {
+			finding,
+			candidate,
+			entropyOnly,
+			deterministic,
+			key,
+		};
+	});
+
+	const verificationCache = new Map();
+	await mapWithConcurrency(tasks, VERIFY_CONCURRENCY, async (task) => {
+		if (task.deterministic) {
+			const verification = buildBackendConfidenceAnalysis(task.finding, task.candidate, {
+				entropyOnly: task.entropyOnly,
+			});
+			verificationCache.set(task.key, {
+				verification,
+				transport: "deterministic-short-circuit",
+				error: null,
+			});
+			meta.analyzer.heuristicCount += 1;
+			meta.analyzer.skippedDeterministicCount =
+				(meta.analyzer.skippedDeterministicCount || 0) + 1;
+			return;
+		}
+
+		const remote = await analyzeCandidateWithAi(task.candidate);
+		let verification = remote.result;
+		let usedFallback = false;
+		if (!verification) {
+			verification = buildBackendConfidenceAnalysis(task.finding, task.candidate, {
+				entropyOnly: task.entropyOnly,
 			});
 			if (verification) {
+				usedFallback = true;
 				meta.analyzer.heuristicCount += 1;
 				meta.analyzer.fallbackUsed = true;
 				meta.analyzer.note =
@@ -308,6 +420,17 @@ async function enrichFindingsWithVerification(
 		} else {
 			meta.analyzer.remoteCount += 1;
 		}
+		verificationCache.set(task.key, {
+			verification,
+			transport: usedFallback ? "backend-heuristic" : remote.transport,
+			error: remote.error,
+		});
+	});
+
+	const enriched = [];
+	for (const entry of entries) {
+		const cached = verificationCache.get(entry.key) || null;
+		const verification = cached?.verification || null;
 
 		if (verification?.aiAnalysis) {
 			meta.analyzer.reviewedCount += 1;
@@ -319,23 +442,23 @@ async function enrichFindingsWithVerification(
 		}
 
 		const candidateLooksAmbiguous =
-			isReferenceLike(candidate) ||
-			isIndirectExpression(candidate) ||
-			isLikelyPlaceholder(candidate);
+			isReferenceLike(entry.candidate) ||
+			isIndirectExpression(entry.candidate) ||
+			isLikelyPlaceholder(entry.candidate);
 		const shouldDrop =
-			(entropyOnly && verification?.aiAnalysis?.is_secret === false) ||
+			(entry.entropyOnly && verification?.aiAnalysis?.is_secret === false) ||
 			(candidateLooksAmbiguous && verification?.aiAnalysis?.is_secret !== true);
 		if (shouldDrop) continue;
 
 		enriched.push(
 			verification
 				? {
-						...finding,
+						...entry.finding,
 						ai_analysis: verification.aiAnalysis || null,
 						ai_source: verification.source || null,
-						ai_candidate: verification.candidate || candidate,
+						ai_candidate: verification.candidate || entry.candidate,
 				  }
-				: finding,
+				: entry.finding,
 		);
 	}
 

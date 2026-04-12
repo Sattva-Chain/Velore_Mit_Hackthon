@@ -24,7 +24,7 @@ import { userAuth } from "../../../context/Auth";
 import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
 
-// 🛑 MODIFIED IPC DECLARATION
+// MODIFIED IPC DECLARATION
 declare global {
 	interface Window {
 		electronAPI?: {
@@ -340,10 +340,10 @@ const displaySnippetLine = (
 	if (reveal || !secret || secret === "Hidden") return line;
 	const partial = maskSecretInLine(line, secret, false);
 	if (partial !== line) return partial;
-	return "/* REDACTED — source differs from detector match; use Reveal to show this line */";
+	return "/* REDACTED -- source differs from detector match; use Reveal to show this line */";
 };
 
-/** VS Code–style editor chrome; inline styles so Electron + file:// always paints correctly. */
+/** VS Code-style editor chrome; inline styles so Electron + file:// always paints correctly. */
 function SourceSnippetView({
 	snippet,
 	secret,
@@ -422,7 +422,7 @@ function SourceSnippetView({
 					}}
 					title={title}
 				>
-					Code — {title}
+					Code -- {title}
 				</span>
 				<span
 					style={{
@@ -647,16 +647,16 @@ export default function Analysis() {
 		try {
 			let response;
 			if (scanType === "url") {
-				logToConsole(`→ Initiating remote scan for: ${payload.url}`);
+				logToConsole(`-> Initiating remote scan for: ${payload.url}`);
 				response = await axiosInstance.post("/scan-url-remediation", payload);
 			} else {
-				logToConsole("→ Initiating local archive deep scan...");
+				logToConsole("-> Initiating local archive deep scan...");
 				const headers = { "Content-Type": "multipart/form-data" } as any;
 				response = await axiosInstance.post("/scan-zip-remediation", payload, {
 					headers,
 				});
 			}
-			logToConsole("← Scan engine returned results.");
+			logToConsole("<- Scan engine returned results.");
 
 			const scanResults: ScanResults = response.data;
 			setResults(scanResults);
@@ -676,8 +676,8 @@ export default function Analysis() {
 			const message = scanResults.error
 				? `Scan failed: ${scanResults.message}`
 				: secretsFound === 0
-					? "✅ Scan Complete! Your repository appears safe and clean."
-					: `⚠️ Detected ${secretsFound} vulnerabilities across ${scanResults.summary!.filesWithSecrets} files.`;
+					? "Scan complete. Your repository appears safe and clean."
+					: `Detected ${secretsFound} vulnerabilities across ${scanResults.summary!.filesWithSecrets} files.`;
 
 			setToastMessage(
 				scanResults.warnings?.length
@@ -756,6 +756,23 @@ export default function Analysis() {
 		return arr;
 	}, [results]);
 
+	const selectedFileFindings = useMemo(
+		() => (selectedFile ? results?.vulnerabilities?.[selectedFile] || [] : []),
+		[selectedFile, results],
+	);
+	const selectedFileSummary = useMemo(
+		() => ({
+			findingCount: selectedFileFindings.length,
+			occurrenceCount: selectedFileFindings.reduce(
+				(total, finding) => total + (finding.occurrenceCount ?? 1),
+				0,
+			),
+			ignoredCount: selectedFileFindings.filter((finding) => finding.ignored)
+				.length,
+		}),
+		[selectedFileFindings],
+	);
+
 	const pagedRows = flatRows.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
 	const totalPages = Math.max(1, Math.ceil(flatRows.length / PAGE_SIZE));
 
@@ -783,18 +800,18 @@ export default function Analysis() {
 		};
 
 		try {
-			logToConsole("→ Syncing telemetry with security database...");
+			logToConsole("-> Syncing telemetry with security database...");
 			const { data: res } = await axios.post(
 				"http://localhost:3000/api/numberkeys",
 				body,
 			);
-			logToConsole("✅ Telemetry sync complete.");
+			logToConsole("Telemetry sync complete.");
 			if (res?.user) {
 				setUser(res.user);
 				refreshUser();
 			}
 		} catch (err: any) {
-			logToConsole("❌ Telemetry sync failed: " + (err.message || err));
+			logToConsole("Telemetry sync failed: " + (err.message || err));
 		}
 	};
 
@@ -837,6 +854,39 @@ export default function Analysis() {
 			avgConfidence,
 		};
 	}, [flatRows]);
+	const severitySummary = useMemo(() => {
+		return flatRows.reduce(
+			(acc, row) => {
+				const level = normalizeSeverity(row.secret.severity);
+				acc[level] = (acc[level] || 0) + 1;
+				return acc;
+			},
+			{ critical: 0, high: 0, medium: 0, low: 0 } as Record<string, number>,
+		);
+	}, [flatRows]);
+	const ignoredFindingsCount = useMemo(
+		() => flatRows.filter((row) => row.secret.ignored).length,
+		[flatRows],
+	);
+	const totalOccurrences = useMemo(
+		() =>
+			flatRows.reduce(
+				(total, row) => total + (row.secret.occurrenceCount ?? 1),
+				0,
+			),
+		[flatRows],
+	);
+	const filesCompromisedCount = results?.summary?.filesWithSecrets ?? 0;
+	const highestRiskFile = useMemo(() => {
+		if (!results?.vulnerabilities) return null;
+		return Object.entries(results.vulnerabilities)
+			.map(([file, secrets]) => ({
+				file,
+				count: secrets.length,
+				ignored: secrets.filter((secret) => secret.ignored).length,
+			}))
+			.sort((a, b) => b.count - a.count)[0];
+	}, [results]);
 	const workflowSteps = [
 		{
 			label: "Preview",
@@ -923,7 +973,7 @@ export default function Analysis() {
 		if (!patchSessionId) return;
 		setPatchBusyKey("preview");
 		try {
-			logToConsole("→ Generating remediation preview...");
+			logToConsole("-> Generating remediation preview...");
 			const { data } = await axiosInstance.post("/patch/preview", {
 				sessionId: patchSessionId,
 				applyAll,
@@ -959,8 +1009,8 @@ export default function Analysis() {
 		try {
 			logToConsole(
 				row
-					? `→ Applying patch for ${row.file}#${row.secret.line}`
-					: "→ Applying remediation to all detected secrets...",
+					? `-> Applying patch for ${row.file}#${row.secret.line}`
+					: "-> Applying remediation to all detected secrets...",
 			);
 			const payload = row
 				? { sessionId: patchSessionId, finding: buildFindingPayload(row) }
@@ -1025,7 +1075,7 @@ export default function Analysis() {
 			});
 			setGuardStatus(data.guard ?? null);
 			setToastMessage("Pre-commit guard installed in the current Git workspace.");
-			logToConsole("→ Pre-commit guard installed.");
+			logToConsole("-> Pre-commit guard installed.");
 		} catch (error: any) {
 			const message = normalizeUiError(
 				error.response?.data?.message ||
@@ -1049,7 +1099,7 @@ export default function Analysis() {
 			setGuardStatus(data.guard ?? null);
 			setGuardCheck(null);
 			setToastMessage("Pre-commit guard removed from the current Git workspace.");
-			logToConsole("→ Pre-commit guard removed.");
+			logToConsole("-> Pre-commit guard removed.");
 		} catch (error: any) {
 			const message = normalizeUiError(
 				error.response?.data?.message ||
@@ -1080,8 +1130,8 @@ export default function Analysis() {
 			);
 			logToConsole(
 				blocked
-					? "→ Guard check found staged secrets."
-					: "→ Guard check passed.",
+					? "-> Guard check found staged secrets."
+					: "-> Guard check passed.",
 			);
 		} catch (error: any) {
 			const message = normalizeUiError(
@@ -1114,8 +1164,8 @@ export default function Analysis() {
 		try {
 			logToConsole(
 				push
-					? "→ Committing and pushing remediation branch..."
-					: "→ Creating remediation commit...",
+					? "-> Committing and pushing remediation branch..."
+					: "-> Creating remediation commit...",
 			);
 			const { data } = await axiosInstance.post("/patch/commit", {
 				sessionId: patchSessionId,
@@ -1127,7 +1177,7 @@ export default function Analysis() {
 			setPatchDiff(data.diff ?? "");
 			let nextResults = data.results ?? null;
 			if (push && !nextResults) {
-				logToConsole("→ Push completed. Triggering verification scan...");
+				logToConsole("-> Push completed. Triggering verification scan...");
 				const verifyResponse = await axiosInstance.post("/patch/verify", {
 					sessionId: patchSessionId,
 					githubToken: githubToken.trim() || undefined,
@@ -1140,8 +1190,8 @@ export default function Analysis() {
 				const remaining = nextResults.summary?.secretsFound ?? 0;
 				logToConsole(
 					remaining === 0
-						? "✓ Post-push verification complete. No secrets remain in the pushed branch."
-						: `⚠ Post-push verification complete. ${remaining} secret${remaining === 1 ? "" : "s"} still remain in the pushed branch.`,
+						? "Post-push verification complete. No secrets remain in the pushed branch."
+						: `Post-push verification complete. ${remaining} secret${remaining === 1 ? "" : "s"} still remain in the pushed branch.`,
 				);
 			} else {
 				setResults((prev) => withRemediationMeta(prev, data.remediation));
@@ -1176,7 +1226,7 @@ export default function Analysis() {
 		if (!patchSessionId) return;
 		setPatchBusyKey("rollback");
 		try {
-			logToConsole("→ Reverting the last remediation commit...");
+			logToConsole("-> Reverting the last remediation commit...");
 			const { data } = await axiosInstance.post("/patch/rollback", {
 				sessionId: patchSessionId,
 				commitSha: lastCommitSha ?? undefined,
@@ -1219,8 +1269,8 @@ export default function Analysis() {
 		try {
 			logToConsole(
 				scope === "shared"
-					? `→ Writing project ignore for fingerprint ${secret.fingerprint.slice(0, 12)}...`
-					: `→ Writing local ignore for fingerprint ${secret.fingerprint.slice(0, 12)}...`,
+					? `-> Writing project ignore for fingerprint ${secret.fingerprint.slice(0, 12)}...`
+					: `-> Writing local ignore for fingerprint ${secret.fingerprint.slice(0, 12)}...`,
 			);
 			const { data } = await axiosInstance.post("/finding-ignore", {
 				sessionId: patchSessionId,
@@ -1238,7 +1288,7 @@ export default function Analysis() {
 						? "Finding ignored for this project."
 						: "Finding ignored locally."),
 			);
-			logToConsole("← Ignore rule saved and scan refreshed.");
+			logToConsole("<- Ignore rule saved and scan refreshed.");
 		} catch (error: any) {
 			const message =
 				error.response?.data?.message || error.message || "Ignore failed.";
@@ -1391,58 +1441,215 @@ export default function Analysis() {
 			</header>
 
 			<main className="max-w-7xl mx-auto px-6 pt-8 space-y-6">
-				{/* Input Section */}
-				<div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-					{/* URL Card */}
-					<div className="p-6 rounded-2xl border border-slate-800 bg-[#0f172a]/50 backdrop-blur-sm shadow-xl">
-						<h2 className="text-sm font-bold text-slate-300 mb-4 uppercase tracking-wider flex items-center gap-2">
-							<LinkIcon /> Remote Repository Scan
-						</h2>
-						<form onSubmit={handleUrlSubmit} className="flex gap-3">
-							<input
-								type="url"
-								value={gitUrl}
-								onChange={(e) => setGitUrl(e.target.value)}
-								placeholder="https://github.com/organization/repo.git"
-								className="flex-1 px-4 py-2.5 rounded-xl bg-[#020617] border border-slate-700 focus:border-cyan-500 text-sm outline-none transition-colors"
-							/>
-							<button
-								type="submit"
-								disabled={loading}
-								className="px-6 py-2.5 rounded-xl bg-cyan-500 hover:bg-cyan-400 disabled:opacity-50 text-black font-bold text-sm transition-colors"
-							>
-								Initialize Scan
-							</button>
-						</form>
-					</div>
+				<section className="rounded-[30px] border border-slate-800 bg-[radial-gradient(circle_at_top_left,rgba(6,182,212,0.12),transparent_34%),linear-gradient(180deg,rgba(15,23,42,0.92),rgba(2,6,23,0.98))] p-6 shadow-[0_24px_80px_rgba(2,6,23,0.35)]">
+					<div className="grid grid-cols-1 gap-6 xl:grid-cols-[1.2fr_0.8fr]">
+						<div className="space-y-6">
+							<div className="space-y-3">
+								<div className="inline-flex items-center rounded-full border border-cyan-500/20 bg-cyan-500/10 px-3 py-1 text-[10px] font-bold uppercase tracking-[0.24em] text-cyan-300">
+									Scan Command Center
+								</div>
+								<h2 className="text-3xl font-black tracking-tight text-white">
+									Run intake, triage findings, and move directly into remediation.
+								</h2>
+								<p className="max-w-3xl text-sm leading-6 text-slate-400">
+									Secure Scan keeps repository intake, operational state, findings review, and remediation on a single page so you can move from first scan to verified branch without losing context.
+								</p>
+							</div>
 
-					{/* ZIP Card */}
-					<div className="p-6 rounded-2xl border border-slate-800 bg-[#0f172a]/50 backdrop-blur-sm shadow-xl">
-						<h2 className="text-sm font-bold text-slate-300 mb-4 uppercase tracking-wider flex items-center gap-2">
-							<UploadIcon /> Local Archive Upload
-						</h2>
-						<form
-							onSubmit={handleZipSubmit}
-							className="flex items-center gap-4 bg-[#020617] border border-slate-700 rounded-xl px-2 py-1.5 pl-4"
-						>
-							<input
-								type="file"
-								accept=".zip"
-								onChange={(e) =>
-									setZipFile(e.target.files ? e.target.files[0] : null)
-								}
-								className="flex-1 text-xs text-slate-400 file:mr-4 file:py-1.5 file:px-4 file:rounded-lg file:border-0 file:text-xs file:font-bold file:bg-slate-800 file:text-white hover:file:bg-slate-700 cursor-pointer"
-							/>
-							<button
-								type="submit"
-								disabled={loading || !zipFile}
-								className="px-5 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 disabled:opacity-50 text-white font-bold text-sm transition-colors"
-							>
-								Upload
-							</button>
-						</form>
+							<div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+								<div className="p-6 rounded-[26px] border border-slate-800 bg-[#0f172a]/60 backdrop-blur-sm shadow-xl">
+									<div className="flex items-start justify-between gap-3">
+										<div>
+											<p className="text-[10px] font-bold uppercase tracking-[0.24em] text-slate-500">
+												Repository Intake
+											</p>
+											<h2 className="mt-2 text-lg font-bold text-white">
+												Remote repository scan
+											</h2>
+											<p className="mt-2 text-sm text-slate-400">
+												Start the full findings, remediation, guard, and verification flow from a Git repository URL.
+											</p>
+										</div>
+										<div className="rounded-full border border-cyan-500/20 bg-cyan-500/10 p-3 text-cyan-300">
+											<LinkIcon />
+										</div>
+									</div>
+									<form onSubmit={handleUrlSubmit} className="mt-5 space-y-3">
+										<input
+											type="url"
+											value={gitUrl}
+											onChange={(e) => setGitUrl(e.target.value)}
+											placeholder="https://github.com/organization/repo.git"
+											className="w-full rounded-xl border border-slate-700 bg-[#020617] px-4 py-3 text-sm text-white outline-none transition-colors focus:border-cyan-500"
+										/>
+										<div className="flex items-center justify-between gap-3">
+											<p className="text-[11px] text-slate-500">
+												Git mode enables remediation branches, pre-commit guard actions, and post-push verification.
+											</p>
+											<button
+												type="submit"
+												disabled={loading}
+												className="px-6 py-2.5 rounded-xl bg-cyan-500 hover:bg-cyan-400 disabled:opacity-50 text-black font-bold text-sm transition-colors"
+											>
+												Initialize Scan
+											</button>
+										</div>
+									</form>
+								</div>
+
+								<div className="p-6 rounded-[26px] border border-slate-800 bg-[#0f172a]/60 backdrop-blur-sm shadow-xl">
+									<div className="flex items-start justify-between gap-3">
+										<div>
+											<p className="text-[10px] font-bold uppercase tracking-[0.24em] text-slate-500">
+												Archive Intake
+											</p>
+											<h2 className="mt-2 text-lg font-bold text-white">
+												Local archive upload
+											</h2>
+											<p className="mt-2 text-sm text-slate-400">
+												Use a ZIP archive for local analysis when you need findings and preview-level remediation without Git push flow.
+											</p>
+										</div>
+										<div className="rounded-full border border-slate-700 bg-slate-900 p-3 text-slate-300">
+											<UploadIcon />
+										</div>
+									</div>
+									<form
+										onSubmit={handleZipSubmit}
+										className="mt-5 space-y-3"
+									>
+										<div className="rounded-xl border border-slate-700 bg-[#020617] px-3 py-3">
+											<input
+												type="file"
+												accept=".zip"
+												onChange={(e) =>
+													setZipFile(e.target.files ? e.target.files[0] : null)
+												}
+												className="w-full text-xs text-slate-400 file:mr-4 file:py-1.5 file:px-4 file:rounded-lg file:border-0 file:text-xs file:font-bold file:bg-slate-800 file:text-white hover:file:bg-slate-700 cursor-pointer"
+											/>
+										</div>
+										<div className="flex items-center justify-between gap-3">
+											<p className="text-[11px] text-slate-500">
+												ZIP mode keeps analysis local and disables commit and push actions.
+											</p>
+											<button
+												type="submit"
+												disabled={loading || !zipFile}
+												className="px-5 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 disabled:opacity-50 text-white font-bold text-sm transition-colors"
+											>
+												Upload Archive
+											</button>
+										</div>
+									</form>
+								</div>
+							</div>
+						</div>
+
+						<div className="rounded-[28px] border border-slate-800 bg-[#020617]/85 p-5 shadow-xl">
+							<div className="flex items-center justify-between gap-3">
+								<div>
+									<p className="text-[10px] font-bold uppercase tracking-[0.24em] text-slate-500">
+										Mission Snapshot
+									</p>
+									<h3 className="mt-2 text-lg font-bold text-white">
+										Current scan posture
+									</h3>
+								</div>
+								<div className="flex items-center gap-2">
+									<div
+										className={`h-2.5 w-2.5 rounded-full ${loading ? "bg-cyan-400" : results?.error ? "bg-rose-500" : isClean(results) ? "bg-emerald-500" : results ? "bg-amber-500" : "bg-slate-600"}`}
+									/>
+									<span className="text-xs font-bold text-slate-300">
+										{loading
+											? "Analyzing"
+											: results?.error
+												? "System Error"
+												: isClean(results)
+													? "Secure"
+													: results
+														? "Findings Present"
+														: "Standby"}
+									</span>
+								</div>
+							</div>
+
+							<div className="mt-5 grid grid-cols-2 gap-3">
+								<div className="rounded-2xl border border-slate-800 bg-slate-950/60 p-4">
+									<p className="text-[10px] font-bold uppercase tracking-[0.22em] text-slate-500">
+										Findings
+									</p>
+									<p className="mt-3 text-3xl font-black text-white">
+										{results?.summary?.secretsFound ?? 0}
+									</p>
+									<p className="mt-1 text-[11px] text-slate-500">
+										{totalOccurrences} occurrences
+									</p>
+								</div>
+								<div className="rounded-2xl border border-slate-800 bg-slate-950/60 p-4">
+									<p className="text-[10px] font-bold uppercase tracking-[0.22em] text-slate-500">
+										Files
+									</p>
+									<p className="mt-3 text-3xl font-black text-white">
+										{filesCompromisedCount}
+									</p>
+									<p className="mt-1 text-[11px] text-slate-500">
+										{highestRiskFile ? highestRiskFile.file.split("/").pop() : "No active target"}
+									</p>
+								</div>
+								<div className="rounded-2xl border border-slate-800 bg-slate-950/60 p-4">
+									<p className="text-[10px] font-bold uppercase tracking-[0.22em] text-slate-500">
+										High Risk
+									</p>
+									<p className="mt-3 text-3xl font-black text-white">
+										{severitySummary.critical + severitySummary.high}
+									</p>
+									<p className="mt-1 text-[11px] text-slate-500">
+										critical and high
+									</p>
+								</div>
+								<div className="rounded-2xl border border-slate-800 bg-slate-950/60 p-4">
+									<p className="text-[10px] font-bold uppercase tracking-[0.22em] text-slate-500">
+										Ignored
+									</p>
+									<p className="mt-3 text-3xl font-black text-white">
+										{ignoredFindingsCount}
+									</p>
+									<p className="mt-1 text-[11px] text-slate-500">
+										{Math.max(flatRows.length - ignoredFindingsCount, 0)} active
+									</p>
+								</div>
+							</div>
+
+							<div className="mt-4 rounded-2xl border border-slate-800 bg-slate-950/60 p-4">
+								<p className="text-[10px] font-bold uppercase tracking-[0.22em] text-slate-500">
+									Current Focus
+								</p>
+								<p className="mt-2 text-sm font-semibold text-white">
+									{selectedFile
+										? selectedFile
+										: highestRiskFile
+											? `Top risk file: ${highestRiskFile.file}`
+											: "Select a source and launch a scan."}
+								</p>
+								<p className="mt-2 text-xs text-slate-500">
+									{results?.error
+										? results.message
+										: isClean(results)
+											? "No exposed secrets detected in the current run."
+											: "Once results land, use the file rail to move into detail inspection and remediation."}
+								</p>
+								{results && !results.error && !isClean(results) && (
+									<button
+										onClick={generatePDFReport}
+										className="mt-4 w-full px-4 py-2 rounded-lg bg-amber-500 hover:bg-amber-400 text-black font-bold text-xs shadow-[0_0_15px_rgba(245,158,11,0.3)] transition-all flex items-center justify-center"
+									>
+										<DownloadIcon /> Export PDF
+									</button>
+								)}
+							</div>
+						</div>
 					</div>
-				</div>
+				</section>
 
 				{/* Secure Banner */}
 				{results && isClean(results) && !loading && !results.error && (
@@ -1486,7 +1693,7 @@ export default function Analysis() {
 									remediation branch after approval.
 								</p>
 								<p className="text-[11px] text-slate-500 mt-3 font-mono">
-									Session: {results.remediation.sessionId} • Source:{" "}
+									Session: {results.remediation.sessionId} | Source:{" "}
 									{results.remediation.sourceType === "git"
 										? "Git repository"
 										: "ZIP workspace"}
@@ -1944,8 +2151,7 @@ export default function Analysis() {
 														</span>
 													</div>
 													<p className="text-[11px] text-slate-500 mt-2">
-														Line {preview.line} •{" "}
-														{preview.envName ?? "No env name"}
+														Line {preview.line} | {preview.envName ?? "No env name"}
 													</p>
 													{preview.oldLine && (
 														<p className="text-xs text-rose-300 font-mono mt-3 break-all">
@@ -1988,10 +2194,31 @@ export default function Analysis() {
 
 				{/* Analytics Dashboard */}
 				{results && !isClean(results) && !results.error && (
-					<>
-						{/* Top Cards Row */}
-						<div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-							<div className="p-6 rounded-2xl border border-slate-800 bg-[#0f172a]/50 flex flex-col justify-center">
+					<section className="space-y-6">
+						<div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
+							<div>
+								<p className="text-[10px] font-bold uppercase tracking-[0.24em] text-slate-500">
+									Results Shell
+								</p>
+								<h3 className="mt-2 text-2xl font-black text-white">
+									Review exposure from system-wide posture down to individual finding actions.
+								</h3>
+								<p className="mt-2 max-w-3xl text-sm leading-6 text-slate-400">
+									The left rail keeps file-level risk visible while the telemetry workspace on the right keeps finding state, source context, and patch actions close together.
+								</p>
+							</div>
+							<div className="rounded-2xl border border-slate-800 bg-[#0f172a]/60 px-4 py-3">
+								<p className="text-[10px] font-bold uppercase tracking-[0.22em] text-slate-500">
+									Focused View
+								</p>
+								<p className="mt-1 text-sm font-semibold text-white">
+									{selectedFile ? selectedFile.split("/").pop() : "No file selected"}
+								</p>
+							</div>
+						</div>
+
+						<div className="grid grid-cols-1 gap-6 md:grid-cols-4">
+							<div className="p-6 rounded-2xl border border-slate-800 bg-[#0f172a]/50 flex flex-col justify-center md:col-span-2">
 								<p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest">
 									Unique Secrets
 								</p>
@@ -2061,51 +2288,92 @@ export default function Analysis() {
 								</div>
 							</div>
 
-							<div className="p-6 rounded-2xl border border-slate-800 bg-[#0f172a]/50">
-								<p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest mb-4">
-									Threat Classification
-								</p>
-								<div className="h-28">
-									{chartData.pie.length > 0 ? (
-										<ResponsiveContainer width="100%" height="100%">
-											<PieChart>
-												<Pie
-													dataKey="value"
-													data={chartData.pie}
-													cx="50%"
-													cy="50%"
-													outerRadius={50}
-													innerRadius={35}
-													paddingAngle={5}
-												>
-													{chartData.pie.map((entry, idx) => (
-														<Cell
-															key={idx}
-															fill={
-																[
-																	"#06b6d4",
-																	"#3b82f6",
-																	"#10b981",
-																	"#f59e0b",
-																	"#f43f5e",
-																][idx % 5]
-															}
-														/>
-													))}
-												</Pie>
-												<Tooltip
-													contentStyle={{
-														backgroundColor: "#020617",
-														border: "1px solid #1e293b",
-														borderRadius: "8px",
-														fontSize: "12px",
-													}}
-												/>
-											</PieChart>
-										</ResponsiveContainer>
-									) : (
-										<p className="text-sm text-slate-500">Insufficient data</p>
-									)}
+							<div className="space-y-6">
+								<div className="p-6 rounded-2xl border border-slate-800 bg-[#0f172a]/50">
+									<p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest mb-4">
+										Threat Classification
+									</p>
+									<div className="h-28">
+										{chartData.pie.length > 0 ? (
+											<ResponsiveContainer width="100%" height="100%">
+												<PieChart>
+													<Pie
+														dataKey="value"
+														data={chartData.pie}
+														cx="50%"
+														cy="50%"
+														outerRadius={50}
+														innerRadius={35}
+														paddingAngle={5}
+													>
+														{chartData.pie.map((entry, idx) => (
+															<Cell
+																key={idx}
+																fill={
+																	[
+																		"#06b6d4",
+																		"#3b82f6",
+																		"#10b981",
+																		"#f59e0b",
+																		"#f43f5e",
+																	][idx % 5]
+																}
+															/>
+														))}
+													</Pie>
+													<Tooltip
+														contentStyle={{
+															backgroundColor: "#020617",
+															border: "1px solid #1e293b",
+															borderRadius: "8px",
+															fontSize: "12px",
+														}}
+													/>
+												</PieChart>
+											</ResponsiveContainer>
+										) : (
+											<p className="text-sm text-slate-500">Insufficient data</p>
+										)}
+									</div>
+								</div>
+								<div className="p-6 rounded-2xl border border-slate-800 bg-[#0f172a]/50">
+									<p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest">
+										Finding State
+									</p>
+									<div className="mt-4 grid grid-cols-2 gap-3">
+										<div className="rounded-xl border border-slate-800 bg-slate-950/60 p-3">
+											<p className="text-[10px] uppercase tracking-[0.2em] text-slate-500">
+												Critical
+											</p>
+											<p className="mt-2 text-lg font-bold text-white">
+												{severitySummary.critical}
+											</p>
+										</div>
+										<div className="rounded-xl border border-slate-800 bg-slate-950/60 p-3">
+											<p className="text-[10px] uppercase tracking-[0.2em] text-slate-500">
+												High
+											</p>
+											<p className="mt-2 text-lg font-bold text-white">
+												{severitySummary.high}
+											</p>
+										</div>
+										<div className="rounded-xl border border-slate-800 bg-slate-950/60 p-3">
+											<p className="text-[10px] uppercase tracking-[0.2em] text-slate-500">
+												Ignored
+											</p>
+											<p className="mt-2 text-lg font-bold text-white">
+												{ignoredFindingsCount}
+											</p>
+										</div>
+										<div className="rounded-xl border border-slate-800 bg-slate-950/60 p-3">
+											<p className="text-[10px] uppercase tracking-[0.2em] text-slate-500">
+												Selected
+											</p>
+											<p className="mt-2 truncate text-sm font-bold text-white">
+												{selectedFile ? selectedFile.split("/").pop() : "None"}
+											</p>
+										</div>
+									</div>
 								</div>
 							</div>
 						</div>
@@ -2121,6 +2389,12 @@ export default function Analysis() {
 									{Object.entries(results!.vulnerabilities || {}).map(
 										([file, secrets]) => {
 											const risk = secrets.length;
+											const ignoredCount = secrets.filter((secret) => secret.ignored)
+												.length;
+											const occurrenceCount = secrets.reduce(
+												(total, secret) => total + (secret.occurrenceCount ?? 1),
+												0,
+											);
 											const active = selectedFile === file;
 											return (
 												<button
@@ -2145,6 +2419,13 @@ export default function Analysis() {
 															<p className="text-[10px] text-slate-500 truncate mt-1">
 																{file}
 															</p>
+															<p className="mt-2 text-[10px] text-slate-500">
+																{occurrenceCount} occurrence
+																{occurrenceCount === 1 ? "" : "s"}
+																{ignoredCount
+																	? ` | ${ignoredCount} ignored`
+																	: ""}
+															</p>
 														</div>
 														<span
 															className={`px-2 py-0.5 rounded text-[10px] font-bold ${risk > 3 ? "bg-rose-500/20 text-rose-400" : "bg-amber-500/20 text-amber-400"}`}
@@ -2161,13 +2442,30 @@ export default function Analysis() {
 
 							{/* Right area: Details Table */}
 							<div className="lg:col-span-8 p-0 rounded-2xl border border-slate-800 bg-[#0f172a]/50 overflow-hidden flex flex-col">
-								<div className="px-6 py-4 border-b border-slate-800 flex items-center justify-between bg-[#020617]/50">
-									<h3 className="text-sm font-bold text-slate-300 uppercase tracking-widest">
-										Secret Telemetry
-									</h3>
-									<span className="text-xs text-slate-500">
-										Showing page {page} of {totalPages}
-									</span>
+								<div className="px-6 py-4 border-b border-slate-800 flex items-start justify-between gap-4 bg-[#020617]/50">
+									<div className="space-y-1">
+										<h3 className="text-sm font-bold text-slate-300 uppercase tracking-widest">
+											Secret Telemetry
+										</h3>
+										<p className="mt-1 text-[11px] text-slate-500">
+											{flatRows.length} finding{flatRows.length === 1 ? "" : "s"} across{" "}
+											{results?.summary?.filesWithSecrets ?? 0} file
+											{(results?.summary?.filesWithSecrets ?? 0) === 1 ? "" : "s"}
+										</p>
+										{selectedFile && (
+											<p className="text-[11px] text-cyan-300">
+												Focused file: {selectedFile}
+											</p>
+										)}
+									</div>
+									<div className="text-right">
+										<span className="text-xs text-slate-500">
+											Showing page {page} of {totalPages}
+										</span>
+										<p className="mt-1 text-[11px] text-slate-500">
+											{selectedFileSummary.findingCount} selected findings
+										</p>
+									</div>
 								</div>
 
 								<div className="overflow-x-auto flex-1 p-2">
@@ -2245,8 +2543,8 @@ export default function Analysis() {
 																	}`}
 																	title={
 																		hasSnippet
-																			? "Toggle VS Code–style code context"
-																			: "No snippet returned — restart backend after update and rescan"
+																			? "Toggle VS Code-style code context"
+																			: "No snippet returned -- restart backend after update and rescan"
 																	}
 																>
 																	{hasSnippet
@@ -2333,7 +2631,7 @@ export default function Analysis() {
 								</div>
 							</div>
 						</div>
-					</>
+					</section>
 				)}
 
 				{/* Console Window */}
@@ -2375,205 +2673,298 @@ export default function Analysis() {
 			{/* Inspect Modal Overlay */}
 			{selectedFile && results && results.vulnerabilities && (
 				<div className="fixed inset-0 z-50 flex items-center justify-center bg-[#020617]/80 backdrop-blur-sm p-4">
-					<div className="bg-[#0f172a] border border-slate-700 rounded-2xl w-full max-w-4xl overflow-hidden shadow-2xl flex flex-col max-h-[85vh]">
-						<div className="px-6 py-4 border-b border-slate-800 flex justify-between items-center bg-[#020617]">
-							<div>
-								<h3 className="text-sm font-bold text-white">
-									File Inspection
-								</h3>
-								<p className="text-[10px] text-slate-400 font-mono mt-1 break-all">
-									{selectedFile}
-								</p>
-							</div>
-							<button
-								onClick={() => setSelectedFile(null)}
-								className="p-2 text-slate-400 hover:text-white hover:bg-slate-800 rounded-lg transition-colors"
-							>
-								<svg
-									className="w-5 h-5"
-									fill="none"
-									viewBox="0 0 24 24"
-									stroke="currentColor"
-								>
-									<path
-										strokeLinecap="round"
-										strokeLinejoin="round"
-										strokeWidth={2}
-										d="M6 18L18 6M6 6l12 12"
-									/>
-								</svg>
-							</button>
-						</div>
+							<div className="bg-[#0f172a] border border-slate-700 rounded-2xl w-full max-w-4xl overflow-hidden shadow-2xl flex flex-col max-h-[85vh]">
+								<div className="px-6 py-4 border-b border-slate-800 flex justify-between items-center bg-[#020617]">
+									<div>
+										<h3 className="text-sm font-bold text-white">
+											File Inspection
+										</h3>
+										<p className="text-[10px] text-slate-400 font-mono mt-1 break-all">
+											{selectedFile}
+										</p>
+										<div className="mt-3 flex flex-wrap items-center gap-2">
+											<span className="inline-flex items-center rounded-full border border-cyan-500/20 bg-cyan-500/10 px-2 py-0.5 text-[10px] font-semibold text-cyan-200">
+												{selectedFileSummary.findingCount} finding
+												{selectedFileSummary.findingCount === 1 ? "" : "s"}
+											</span>
+											<span className="inline-flex items-center rounded-full border border-slate-700 bg-slate-900 px-2 py-0.5 text-[10px] font-semibold text-slate-300">
+												{selectedFileSummary.occurrenceCount}{" "}
+												total occurrence
+												{selectedFileSummary.occurrenceCount === 1 ? "" : "s"}
+											</span>
+											{selectedFileSummary.ignoredCount > 0 ? (
+												<span className="inline-flex items-center rounded-full border border-amber-500/20 bg-amber-500/10 px-2 py-0.5 text-[10px] font-semibold text-amber-200">
+													{selectedFileSummary.ignoredCount} ignored
+												</span>
+											) : null}
+										</div>
+									</div>
+									<button
+										onClick={() => setSelectedFile(null)}
+										className="p-2 text-slate-400 hover:text-white hover:bg-slate-800 rounded-lg transition-colors"
+									>
+										<svg
+											className="w-5 h-5"
+											fill="none"
+											viewBox="0 0 24 24"
+											stroke="currentColor"
+										>
+											<path
+												strokeLinecap="round"
+												strokeLinejoin="round"
+												strokeWidth={2}
+												d="M6 18L18 6M6 6l12 12"
+											/>
+										</svg>
+									</button>
+								</div>
 
-						<div className="p-6 overflow-y-auto space-y-4 bg-[#0f172a]">
+						<div className="p-6 overflow-y-auto space-y-5 bg-[#0f172a]">
 							{(results.vulnerabilities[selectedFile] || []).map((s, i) => {
 								const findingKey = `${selectedFile}#${i}`;
+								const row = {
+									file: selectedFile,
+									secret: s,
+									findingKey,
+								};
 								return (
 									<div
 										key={findingKey}
-										className="p-4 rounded-xl bg-[#020617] border border-slate-800"
+										className="rounded-2xl border border-slate-800 bg-[#020617] p-5 shadow-[0_16px_40px_rgba(2,6,23,0.35)]"
 									>
-										<div className="flex justify-between items-start mb-4">
-											<div>
-												<span className="px-2 py-1 rounded bg-rose-500/10 text-rose-400 text-[10px] font-bold uppercase tracking-wider border border-rose-500/20">
-													{s.type}
-												</span>
-												<p className="text-xs text-slate-400 mt-3 font-mono">
-													Line: <span className="text-cyan-400">{s.line}</span>{" "}
-													• Branch: {s.branch}
-												</p>
-												<div className="mt-3 flex flex-wrap items-center gap-2">
-													<SeverityBadge severity={s.severity} />
-													<span className="inline-flex items-center rounded-full border border-cyan-500/20 bg-cyan-500/10 px-2 py-0.5 text-[10px] font-semibold text-cyan-200">
-														Confidence {formatConfidence(s.confidence)}
-													</span>
-													{s.aiAnalysis ? (
-														<span className="inline-flex items-center rounded-full border border-fuchsia-500/20 bg-fuchsia-500/10 px-2 py-0.5 text-[10px] font-semibold text-fuchsia-200">
-															AI {Math.round((s.aiAnalysis.confidence ?? 0) * 100)}%
-														</span>
-													) : null}
-													{s.ignored ? (
-														<span className="inline-flex items-center rounded-full border border-slate-600 bg-slate-800/80 px-2 py-0.5 text-[10px] font-semibold text-slate-300">
-															{formatIgnoreScope(s.ignoreScope)}
-														</span>
-													) : (
-														<span className="inline-flex items-center rounded-full border border-emerald-500/20 bg-emerald-500/10 px-2 py-0.5 text-[10px] font-semibold text-emerald-300">
-															Active finding
-														</span>
-													)}
-													<span className="inline-flex items-center rounded-full border border-slate-700 bg-slate-900 px-2 py-0.5 text-[10px] font-semibold text-slate-300">
-														Occurrences {s.occurrenceCount ?? 1}
-													</span>
+										<div className="grid gap-5 xl:grid-cols-[minmax(0,1.45fr)_320px]">
+											<div className="space-y-4">
+												<div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+													<div className="space-y-3">
+														<div className="flex flex-wrap items-center gap-2">
+															<span className="rounded-full border border-rose-500/20 bg-rose-500/10 px-2 py-1 text-[10px] font-bold uppercase tracking-wider text-rose-300">
+																{s.type}
+															</span>
+															<SeverityBadge severity={s.severity} />
+															<span className="inline-flex items-center rounded-full border border-cyan-500/20 bg-cyan-500/10 px-2 py-0.5 text-[10px] font-semibold text-cyan-200">
+																Confidence {formatConfidence(s.confidence)}
+															</span>
+															{s.aiAnalysis ? (
+																<span className="inline-flex items-center rounded-full border border-fuchsia-500/20 bg-fuchsia-500/10 px-2 py-0.5 text-[10px] font-semibold text-fuchsia-200">
+																	AI {Math.round((s.aiAnalysis.confidence ?? 0) * 100)}%
+																</span>
+															) : null}
+															{s.ignored ? (
+																<span className="inline-flex items-center rounded-full border border-amber-500/20 bg-amber-500/10 px-2 py-0.5 text-[10px] font-semibold text-amber-200">
+																	{formatIgnoreScope(s.ignoreScope)}
+																</span>
+															) : (
+																<span className="inline-flex items-center rounded-full border border-emerald-500/20 bg-emerald-500/10 px-2 py-0.5 text-[10px] font-semibold text-emerald-300">
+																	Active finding
+																</span>
+															)}
+														</div>
+														<div>
+															<p className="text-sm font-semibold text-white">
+																Finding workspace
+															</p>
+															<p className="mt-1 text-xs font-mono text-slate-400">
+																Line: <span className="text-cyan-400">{s.line}</span>{" "}
+																| Branch: {s.branch}
+															</p>
+															<p className="mt-2 text-xs leading-6 text-slate-300">
+																Inspect the exposed value, confirm analyzer context,
+																then move directly into ignore or remediation actions.
+															</p>
+														</div>
+													</div>
+													<button
+														onClick={() =>
+															setRevealSecrets((p) => ({
+																...p,
+																[findingKey]: !p[findingKey],
+															}))
+														}
+														className="rounded-lg border border-slate-700 px-3 py-1.5 text-[10px] font-bold text-white hover:bg-slate-800"
+													>
+														{revealSecrets[findingKey]
+															? "Mask Secret"
+															: "Reveal Secret"}
+													</button>
 												</div>
-												{false && (s.severity || s.confidence !== undefined || s.ignored) && (
-													<p className="text-[10px] text-slate-500 mt-2">
-														{s.severity ? `Severity: ${s.severity}` : ""}
-														{s.confidence !== undefined
-															? `${s.severity ? " • " : ""}Confidence: ${s.confidence}`
-															: ""}
-														{s.ignored
-															? `${s.severity || s.confidence !== undefined ? " • " : ""}Ignored${s.ignoreScope ? ` (${s.ignoreScope})` : ""}`
-															: ""}
+
+												<div className="rounded-xl border border-slate-800 bg-black/40 p-4">
+													<p className="text-[10px] font-bold uppercase tracking-[0.22em] text-slate-500">
+														Secret Preview
 													</p>
+													<div className="mt-3 overflow-x-auto rounded-lg border border-slate-800 bg-black/60 p-3 font-mono text-xs text-rose-300">
+														{revealSecrets[findingKey]
+															? s.secret
+															: mask(s.secret)}
+													</div>
+												</div>
+
+												{s.aiAnalysis ? (
+													<div className="rounded-xl border border-fuchsia-500/20 bg-fuchsia-500/5 p-4">
+														<div className="flex flex-wrap items-center gap-2">
+															<span className="inline-flex items-center rounded-full border border-fuchsia-500/20 bg-fuchsia-500/10 px-2 py-0.5 text-[10px] font-semibold text-fuchsia-200">
+																{titleCase(s.aiAnalysis.verdict)} via {s.aiSource ?? "heuristic"}
+															</span>
+															<span className="inline-flex items-center rounded-full border border-slate-700 bg-slate-900 px-2 py-0.5 text-[10px] font-semibold text-slate-300">
+																Confidence {Math.round((s.aiAnalysis.confidence ?? 0) * 100)}%
+															</span>
+															{s.aiCandidate?.kind ? (
+																<span className="inline-flex items-center rounded-full border border-slate-700 bg-slate-900 px-2 py-0.5 text-[10px] font-semibold text-slate-300">
+																	Primary {s.aiCandidate.kind}
+																</span>
+															) : null}
+														</div>
+														{s.aiAnalysis.reason ? (
+															<p className="mt-3 text-xs leading-6 text-slate-300">
+																{s.aiAnalysis.reason}
+															</p>
+														) : null}
+													</div>
+												) : (
+													<div className="rounded-xl border border-slate-800 bg-slate-950/60 p-4">
+														<p className="text-[10px] font-bold uppercase tracking-[0.22em] text-slate-500">
+															Analyzer Context
+														</p>
+														<p className="mt-3 text-xs leading-6 text-slate-400">
+															No AI verification payload was attached to this finding.
+															Heuristic detection and metadata remain available for review.
+														</p>
+													</div>
 												)}
-											</div>
-											<button
-												onClick={() =>
-													setRevealSecrets((p) => ({
-														...p,
-														[findingKey]: !p[findingKey],
-													}))
-												}
-												className="px-3 py-1.5 rounded-lg border border-slate-700 text-[10px] font-bold hover:bg-slate-800 text-white"
-											>
-												{revealSecrets[findingKey]
-													? "Mask Secret"
-													: "Reveal Secret"}
-											</button>
-										</div>
 
-										<div className="bg-black/50 p-3 rounded-lg border border-slate-800 font-mono text-xs overflow-x-auto text-rose-300">
-											{revealSecrets[findingKey] ? s.secret : mask(s.secret)}
-										</div>
-
-										{s.aiAnalysis && (
-											<div className="mt-4 rounded-xl border border-fuchsia-500/20 bg-fuchsia-500/5 p-4">
-												<div className="flex flex-wrap items-center gap-2">
-													<span className="inline-flex items-center rounded-full border border-fuchsia-500/20 bg-fuchsia-500/10 px-2 py-0.5 text-[10px] font-semibold text-fuchsia-200">
-														{titleCase(s.aiAnalysis.verdict)} via {s.aiSource ?? "heuristic"}
-													</span>
-													<span className="inline-flex items-center rounded-full border border-slate-700 bg-slate-900 px-2 py-0.5 text-[10px] font-semibold text-slate-300">
-														Confidence {Math.round((s.aiAnalysis.confidence ?? 0) * 100)}%
-													</span>
-													{s.aiCandidate?.kind ? (
-														<span className="inline-flex items-center rounded-full border border-slate-700 bg-slate-900 px-2 py-0.5 text-[10px] font-semibold text-slate-300">
-															Primary {s.aiCandidate.kind}
-														</span>
-													) : null}
+												<div className="rounded-xl border border-slate-800 bg-slate-950/60 p-4">
+													<p className="text-[10px] font-bold uppercase tracking-[0.22em] text-slate-500">
+														Code Context
+													</p>
+													{s.snippet && s.snippet.lines?.length > 0 ? (
+														<div className="mt-3">
+															<SourceSnippetView
+																snippet={s.snippet}
+																secret={s.secret}
+																reveal={!!revealSecrets[findingKey]}
+																fileTitle={selectedFile.split("/").pop()}
+															/>
+														</div>
+													) : (
+														<p className="mt-3 text-[10px] leading-6 text-slate-500">
+															No source preview. Use a ZIP or URL scan with the latest backend, ensure TruffleHog reports a file path and line, and restart{" "}
+															<span className="font-mono text-slate-400">
+																node server.js
+															</span>
+															.
+														</p>
+													)}
 												</div>
-												{s.aiAnalysis.reason ? (
-													<p className="text-xs text-slate-300 mt-3 leading-6">
-														{s.aiAnalysis.reason}
-													</p>
-												) : null}
 											</div>
-										)}
 
-										{s.snippet && s.snippet.lines?.length > 0 ? (
-											<div className="mt-4">
-												<SourceSnippetView
-													snippet={s.snippet}
-													secret={s.secret}
-													reveal={!!revealSecrets[findingKey]}
-													fileTitle={selectedFile.split("/").pop()}
-												/>
-											</div>
-										) : (
-											<p className="mt-3 text-[10px] text-slate-500">
-												No source preview. Use a ZIP or URL scan with the latest
-												backend, ensure TruffleHog reports a file path and line,
-												and restart{" "}
-												<span className="font-mono text-slate-400">
-													node server.js
-												</span>
-												.
-											</p>
-										)}
+											<div className="space-y-4">
+												<div className="rounded-xl border border-slate-800 bg-slate-950/70 p-4">
+													<p className="text-[10px] font-bold uppercase tracking-[0.22em] text-slate-500">
+														Finding State
+													</p>
+													<div className="mt-3 space-y-3 text-xs">
+														<div className="flex items-center justify-between gap-3">
+															<span className="text-slate-500">Occurrences</span>
+															<span className="font-semibold text-white">
+																{s.occurrenceCount ?? 1}
+															</span>
+														</div>
+														<div className="flex items-center justify-between gap-3">
+															<span className="text-slate-500">Ignore state</span>
+															<span className="font-semibold text-white">
+																{s.ignored ? formatIgnoreScope(s.ignoreScope) : "Active"}
+															</span>
+														</div>
+														<div className="flex items-center justify-between gap-3">
+															<span className="text-slate-500">Analyzer</span>
+															<span className="font-semibold text-white">
+																{s.aiAnalysis ? titleCase(s.aiAnalysis.verdict) : "Heuristic"}
+															</span>
+														</div>
+														<div className="flex items-center justify-between gap-3">
+															<span className="text-slate-500">Commit</span>
+															<span className="font-mono text-[11px] text-slate-300">
+																{s.git?.note === "uncommitted"
+																	? "Working tree"
+																	: s.commit && s.commit !== "N/A"
+																		? s.commit.substring(0, 12)
+																		: "Unknown"}
+															</span>
+														</div>
+													</div>
+												</div>
 
-										<div className="mt-4 pt-4 border-t border-slate-800 flex flex-col gap-2 text-[10px] text-slate-500 sm:flex-row sm:items-center sm:justify-between">
-											<div>
-												<p>Commit Context</p>
-												{s.git?.note === "uncommitted" ? (
-													<p className="mt-1 text-amber-300 font-semibold">
-														Introduced in this commit
+												<div className="rounded-xl border border-slate-800 bg-slate-950/70 p-4">
+													<p className="text-[10px] font-bold uppercase tracking-[0.22em] text-slate-500">
+														Remediation Actions
 													</p>
-												) : s.git?.firstSeenDate ? (
-													<p className="mt-1">
-														First seen {new Date(s.git.firstSeenDate).toLocaleDateString()}
-														{s.git.ageDays !== undefined &&
-														s.git.ageDays !== null
-															? ` • ${s.git.ageDays}d old`
-															: ""}
+													<p className="mt-3 text-xs leading-6 text-slate-400">
+														Use the patch agent for targeted repair, or suppress the finding with a local or shared ignore rule.
 													</p>
-												) : null}
+													<div className="mt-4 grid gap-2">
+														<button
+															type="button"
+															onClick={() => handlePatchApply(row)}
+															disabled={!canUsePatchAgent || patchBusyKey !== null}
+															className="rounded-lg bg-cyan-500 px-3 py-2 text-xs font-bold text-black hover:bg-cyan-400 disabled:opacity-50"
+														>
+															{patchBusyKey === findingKey ? "Patching..." : "Patch This Finding"}
+														</button>
+														<button
+															type="button"
+															disabled={!!s.ignored || ignoreBusyKey !== null}
+															onClick={() => handleIgnoreFinding(s, "local", findingKey)}
+															className="rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-[10px] font-semibold text-slate-200 hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
+														>
+															{ignoreBusyKey === `${findingKey}:local` ? "Ignoring..." : "Ignore Locally"}
+														</button>
+														<button
+															type="button"
+															disabled={!!s.ignored || ignoreBusyKey !== null}
+															onClick={() => handleIgnoreFinding(s, "shared", findingKey)}
+															className="rounded-lg border border-cyan-500/30 bg-cyan-500/10 px-3 py-2 text-[10px] font-semibold text-cyan-300 hover:bg-cyan-500/20 disabled:cursor-not-allowed disabled:opacity-50"
+														>
+															{ignoreBusyKey === `${findingKey}:shared` ? "Ignoring..." : "Ignore For Project"}
+														</button>
+													</div>
+												</div>
+
+												<div className="rounded-xl border border-slate-800 bg-slate-950/70 p-4">
+													<p className="text-[10px] font-bold uppercase tracking-[0.22em] text-slate-500">
+														Verification Context
+													</p>
+													<div className="mt-3 space-y-2 text-xs text-slate-400">
+														{s.git?.note === "uncommitted" ? (
+															<p className="font-semibold text-amber-300">
+																Introduced in the working tree and still uncommitted.
+															</p>
+														) : s.git?.firstSeenDate ? (
+															<p>
+																First seen {new Date(s.git.firstSeenDate).toLocaleDateString()}
+																{s.git.ageDays !== undefined && s.git.ageDays !== null ? ` | ${s.git.ageDays}d old` : ""}
+															</p>
+														) : (
+															<p>No historical commit metadata available.</p>
+														)}
+														{results.remediation ? (
+															<p>
+																Patch session ready in{" "}
+																<span className="font-mono text-slate-300">
+																	{results.remediation.sourceType === "git" ? "git" : "zip"}
+																</span>{" "}
+																mode.
+															</p>
+														) : null}
+														{(results.remediation?.changedFilesCount ?? 0) > 0 ? (
+															<p className="text-cyan-300">
+																Workspace has uncommitted remediation changes pending review.
+															</p>
+														) : (
+															<p>No unapplied remediation diff is currently tracked.</p>
+														)}
+													</div>
+												</div>
 											</div>
-											<p className="font-mono bg-slate-900 px-2 py-1 rounded">
-												{s.git?.note === "uncommitted"
-													? "Working tree"
-													: s.commit && s.commit !== "N/A"
-														? s.commit.substring(0, 12)
-														: "Unknown Commit"}
-											</p>
-										</div>
-										<div className="mt-3 flex flex-wrap gap-2">
-											<button
-												type="button"
-												disabled={
-													!!s.ignored || ignoreBusyKey !== null
-												}
-												onClick={() =>
-													handleIgnoreFinding(s, "local", findingKey)
-												}
-												className="px-3 py-1.5 rounded-lg border border-slate-700 bg-slate-900 text-[10px] font-semibold text-slate-200 hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
-											>
-												{ignoreBusyKey === `${findingKey}:local`
-													? "Ignoring..."
-													: "Ignore locally"}
-											</button>
-											<button
-												type="button"
-												disabled={
-													!!s.ignored || ignoreBusyKey !== null
-												}
-												onClick={() =>
-													handleIgnoreFinding(s, "shared", findingKey)
-												}
-												className="px-3 py-1.5 rounded-lg border border-cyan-500/30 bg-cyan-500/10 text-[10px] font-semibold text-cyan-300 hover:bg-cyan-500/20 disabled:cursor-not-allowed disabled:opacity-50"
-											>
-												{ignoreBusyKey === `${findingKey}:shared`
-													? "Ignoring..."
-													: "Ignore for project"}
-											</button>
 										</div>
 									</div>
 								);
@@ -2592,7 +2983,7 @@ export default function Analysis() {
 						onClick={() => setToastMessage(null)}
 						className="text-slate-500 hover:text-white ml-2"
 					>
-						×
+						x
 					</button>
 				</div>
 			)}

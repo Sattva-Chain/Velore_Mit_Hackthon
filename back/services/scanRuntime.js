@@ -14,6 +14,12 @@ const {
 } = require("./findingIgnore");
 
 const execFileAsync = util.promisify(execFile);
+const REPO_WORKSPACE_TTL_MS = Math.max(
+	60 * 1000,
+	parseInt(String(process.env.SECURE_SCAN_REPO_CACHE_TTL_MS || `${5 * 60 * 1000}`), 10) ||
+		5 * 60 * 1000,
+);
+const repoWorkspaceCache = new Map();
 
 function sanitizeExecMessage(value) {
 	if (value == null) return "";
@@ -82,6 +88,22 @@ function makeWorkspacePath(kind) {
 	const runtime = getRuntimePaths();
 	return path.join(runtime.temp, `${Date.now()}-${kind}`);
 }
+
+function repoWorkspaceCacheKey(repoURL, branchName = "") {
+	return `${String(repoURL || "").trim()}::${String(branchName || "").trim() || "HEAD"}`;
+}
+
+function cleanupExpiredRepoWorkspaces() {
+	const cutoff = Date.now();
+	for (const [key, entry] of repoWorkspaceCache.entries()) {
+		if ((entry.inUseCount || 0) > 0) continue;
+		if ((entry.expiresAt || 0) > cutoff) continue;
+		cleanupPath(entry.workspacePath);
+		repoWorkspaceCache.delete(key);
+	}
+}
+
+setInterval(cleanupExpiredRepoWorkspaces, 60 * 1000).unref?.();
 
 function safeParseJsonLines(lines) {
 	const results = [];
@@ -203,6 +225,63 @@ async function cloneRepo(repoURL, clonePath) {
 			code: "REPO_CLONE_FAILED",
 			details: error,
 		});
+	}
+}
+
+async function acquireClonedRepoWorkspace({
+	repoURL,
+	cloneURL = null,
+	branchName = null,
+	workspaceKind = "repo-cache",
+} = {}) {
+	const repoKey = repoWorkspaceCacheKey(repoURL, branchName);
+	const existing = repoWorkspaceCache.get(repoKey);
+	if (existing && existing.workspacePath && fs.existsSync(existing.workspacePath)) {
+		existing.inUseCount = (existing.inUseCount || 0) + 1;
+		existing.expiresAt = Date.now() + REPO_WORKSPACE_TTL_MS;
+		return {
+			workspacePath: existing.workspacePath,
+			cached: true,
+			release: () => releaseClonedRepoWorkspace(existing.workspacePath),
+		};
+	}
+
+	const workspacePath = makeWorkspacePath(workspaceKind);
+	const args = ["clone", "--depth", "1"];
+	if (branchName) {
+		args.push("--branch", branchName);
+	}
+	args.push(cloneURL || repoURL, workspacePath);
+
+	try {
+		await runGit(args, {
+			maxBuffer: 1024 * 1024 * 10,
+		});
+		repoWorkspaceCache.set(repoKey, {
+			repoKey,
+			repoURL,
+			branchName: branchName || null,
+			workspacePath,
+			expiresAt: Date.now() + REPO_WORKSPACE_TTL_MS,
+			inUseCount: 1,
+		});
+		return {
+			workspacePath,
+			cached: false,
+			release: () => releaseClonedRepoWorkspace(workspacePath),
+		};
+	} catch (error) {
+		cleanupPath(workspacePath);
+		throw error;
+	}
+}
+
+function releaseClonedRepoWorkspace(workspacePath) {
+	for (const entry of repoWorkspaceCache.values()) {
+		if (entry.workspacePath !== workspacePath) continue;
+		entry.inUseCount = Math.max(0, (entry.inUseCount || 0) - 1);
+		entry.expiresAt = Date.now() + REPO_WORKSPACE_TTL_MS;
+		return;
 	}
 }
 
@@ -493,6 +572,8 @@ module.exports = {
 	makeWorkspacePath,
 	runTrufflehog,
 	cloneRepo,
+	acquireClonedRepoWorkspace,
+	releaseClonedRepoWorkspace,
 	runGit,
 	detectGitRepoRoot,
 	listStagedFiles,

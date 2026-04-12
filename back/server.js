@@ -12,6 +12,7 @@ const {
 	getRuntimePaths,
 	makeWorkspacePath,
 	cloneRepo,
+	acquireClonedRepoWorkspace,
 	extractZip,
 	cleanupPath,
 	cleanupFile,
@@ -1135,12 +1136,16 @@ async function buildFreshRemoteVerificationScan({
 	branchName,
 	githubToken,
 }) {
-	const verificationPath = makeWorkspacePath("verify-remote");
 	const cloneUrl = buildAuthedGithubUrl(repoUrl, githubToken);
+	const workspace = await acquireClonedRepoWorkspace({
+		repoURL: repoUrl,
+		cloneURL: cloneUrl,
+		branchName,
+		workspaceKind: "verify-remote",
+	});
 	try {
-		await runGit(["clone", "--depth", "1", "--branch", branchName, cloneUrl, verificationPath]);
 		const { formatted, warnings } = await sharedExecuteScanWorkspace({
-			repoPath: verificationPath,
+			repoPath: workspace.workspacePath,
 			isGitRepo: true,
 			sourceType: "git",
 			scanMeta: {
@@ -1157,7 +1162,7 @@ async function buildFreshRemoteVerificationScan({
 		});
 		return withDegradedWarnings(formatted, warnings);
 	} finally {
-		cleanupPath(verificationPath);
+		workspace.release();
 	}
 }
 
@@ -1199,11 +1204,19 @@ app.post("/scan-url", async (req, res) => {
 	if (!repoURL)
 		return res.status(400).json({ error: true, message: "URL required" });
 
-	const clonePath = makeWorkspacePath("repo");
+	let workspace = null;
 	console.log("🔍 Scanning repo:", repoURL);
 
 	try {
-		await cloneRepo(repoURL, clonePath);
+		workspace = await acquireClonedRepoWorkspace({
+			repoURL,
+			workspaceKind: "repo",
+		});
+		const clonePath = workspace.workspacePath;
+		console.log(
+			workspace.cached ? "âœ… Repo workspace reused:" : "âœ… Repo cloned:",
+			workspace.workspacePath,
+		);
 		console.log("✅ Repo cloned:", clonePath);
 
 		const { formatted } = await sharedExecuteScanWorkspace({
@@ -1222,7 +1235,7 @@ app.post("/scan-url", async (req, res) => {
 	} catch (err) {
 		return respondWithScanError(res, err);
 	} finally {
-		cleanupPath(clonePath);
+		workspace?.release?.();
 	}
 });
 
