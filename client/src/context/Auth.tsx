@@ -1,4 +1,4 @@
-import { createContext, useState, useEffect, useContext, type ReactNode } from "react";
+import { createContext, useState, useEffect, useContext, useCallback, type ReactNode } from "react";
 import axios from "axios";
 import { useNavigate } from "react-router-dom"; // Fixed: Added useNavigate import
 
@@ -21,7 +21,7 @@ interface UserData {
 }
 
 // 2. Updated Repository to be used as an Array in most places
-interface Repository {
+export interface Repository {
   _id: string;
   userId: string;
   gitUrl: string;
@@ -33,6 +33,14 @@ interface Repository {
 }
 
 // 3. Expanded CompanyData
+export interface OrgDashboardStats {
+  totalRepositories: number;
+  verifiedRepositories: number;
+  unverifiedRepositories: number;
+  vulnerableAccounts: number;
+  scannedMembersCount: number;
+}
+
 interface CompanyData {
   _id: string;
   companyName: string;
@@ -41,17 +49,24 @@ interface CompanyData {
   totalRepositories?: string;
   totalEmployees: string;
   loggedInCount?: number;
-  // Missing fields fixed here:
-  employees?: any[]; 
+  employees?: Record<string, unknown>[];
+  /** Legacy API shape — normalized into `employees` on load */
+  allEmployees?: Record<string, unknown>[];
   developersCount?: number;
   vulnerableCount?: number;
+  dashboardStats?: OrgDashboardStats;
 }
+
+const AUTH_TOKEN_KEY = "velore_securescan_token";
 
 interface AuthContextType {
   token: string | null;
   user: UserData | null;
   repo: Repository[] | null; // Fixed: Changed from single object to Array
   company: CompanyData | null;
+  /** True after first load from Electron / localStorage */
+  sessionHydrated: boolean;
+  authReady: boolean;
   setUser: React.Dispatch<React.SetStateAction<UserData | null>>;
   setRepo: React.Dispatch<React.SetStateAction<Repository[] | null>>;
   setCompany: React.Dispatch<React.SetStateAction<CompanyData | null>>;
@@ -61,6 +76,30 @@ interface AuthContextType {
   refreshUser: () => Promise<void>;
 }
 
+function mergeUserWithRepos(u: UserData, repos: Repository[]): UserData {
+  const times = repos
+    .map((r) => r.LastScanned)
+    .filter(Boolean)
+    .map((d) => new Date(d as string).getTime())
+    .filter((t) => !Number.isNaN(t));
+  const maxTs = times.length ? Math.max(...times) : 0;
+  const safeRepos = repos.filter((r) => r.Status === "Safe").length;
+  const vulnRepos = repos.filter((r) => r.Status === "Vulnerable").length;
+  const otherRepos = repos.length - safeRepos - vulnRepos;
+
+  if (repos.length === 0) {
+    return { ...u };
+  }
+
+  return {
+    ...u,
+    LastScanned: maxTs ? new Date(maxTs).toISOString() : u.LastScanned,
+    TotalRepositories: repos.length,
+    VerifiedRepositories: safeRepos,
+    UnverifiedRepositories: vulnRepos + Math.max(0, otherRepos),
+  };
+}
+
 export const AuthContext = createContext<AuthContextType | null>(null);
 
 export const AuthProvider = ({ children }: { children: ReactNode }) => {
@@ -68,25 +107,50 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
   const [user, setUser] = useState<UserData | null>(null);
   const [repo, setRepo] = useState<Repository[] | null>(null); // Fixed: Array state
   const [company, setCompany] = useState<CompanyData | null>(null);
-  
+  const [authReady, setAuthReady] = useState(false);
+  const [sessionHydrated, setSessionHydrated] = useState(false);
+
   const navigate = useNavigate(); // Fixed: Defined navigate
 
-  // ✅ Load token initially
   useEffect(() => {
-    const loadToken = async () => {
-      const savedToken = await window.electronAPI?.getToken?.();
-      if (savedToken) setTokenState(savedToken);
+    let alive = true;
+    (async () => {
+      try {
+        let saved: string | null = null;
+        try {
+          saved = (await window.electronAPI?.getToken?.()) ?? null;
+        } catch {
+          saved = null;
+        }
+        if (!saved && typeof localStorage !== "undefined") {
+          saved = localStorage.getItem(AUTH_TOKEN_KEY);
+        }
+        if (alive && saved) {
+          setTokenState(saved);
+        }
+      } finally {
+        if (alive) setSessionHydrated(true);
+      }
+    })();
+    return () => {
+      alive = false;
     };
-    loadToken();
   }, []);
 
-  // Fixed: window.electronAPI mapping (using storeToken as seen in errors)
   const setToken = async (newToken: string | null) => {
-    setTokenState(newToken);
     if (newToken) {
-      await window.electronAPI?.storeToken?.(newToken);
-    } else {
-      await window.electronAPI?.clearToken?.();
+      setAuthReady(false);
+    }
+    setTokenState(newToken);
+    if (typeof localStorage !== "undefined") {
+      if (newToken) localStorage.setItem(AUTH_TOKEN_KEY, newToken);
+      else localStorage.removeItem(AUTH_TOKEN_KEY);
+    }
+    try {
+      if (newToken) await window.electronAPI?.storeToken?.(newToken);
+      else await window.electronAPI?.clearToken?.();
+    } catch {
+      /* optional in web */
     }
   };
 
@@ -99,42 +163,58 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     setUser(null);
     setCompany(null);
     setRepo(null);
+    setAuthReady(true);
     navigate("/");
   };
 
-  const refreshUser = async () => {
-    if (!token) return;
+  const refreshUser = useCallback(async () => {
+    if (!token) {
+      setAuthReady(true);
+      return;
+    }
 
+    setAuthReady(false);
     try {
-      // ✅ Fetch User/Staff Data
       const userRes = await axios.post("http://localhost:3000/api/authsss", { token });
       if (userRes.data.success) {
-        setRepo(userRes.data.repositories || []);
-        setUser(userRes.data.userDatas);
+        const repos: Repository[] = userRes.data.repositories || [];
+        const raw = userRes.data.userDatas;
+        setRepo(repos);
+        setUser(mergeUserWithRepos(raw, repos));
         setCompany(null);
+        setAuthReady(true);
         return;
       }
 
-      // ✅ Fetch Org Data
       const companyRes = await axios.post("http://localhost:3000/api/auths", { token });
       if (companyRes.data.success) {
-        setCompany(companyRes.data.compnaydatas);
+        const payload = companyRes.data.compnaydatas as CompanyData;
+        const { allEmployees, employees: empList, ...companyRest } = payload;
+        setCompany({
+          ...companyRest,
+          employees: empList ?? allEmployees ?? [],
+        });
         setRepo(null);
         setUser(null);
+        setAuthReady(true);
         return;
       }
 
-      await logout();
+      await setToken(null);
+      setUser(null);
+      setCompany(null);
+      setRepo(null);
+      setAuthReady(true);
+      navigate("/");
     } catch (error) {
       console.error("❌ Auth Refresh Failed:", error);
-      // Don't logout on simple network error, only on 401/403
+      setAuthReady(true);
     }
-  };
+  }, [token, navigate]);
 
-  // ✅ Token change → Validate user
   useEffect(() => {
-    if (token) refreshUser();
-  }, [token]);
+    refreshUser();
+  }, [refreshUser]);
 
   return (
     <AuthContext.Provider
@@ -143,6 +223,8 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
         user,
         repo,
         company,
+        sessionHydrated,
+        authReady,
         setUser,
         setRepo,
         setCompany,

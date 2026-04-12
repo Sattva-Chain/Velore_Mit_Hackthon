@@ -68,10 +68,80 @@ export const CompnayAuth = async (req, res) => {
       }
     ]);
 
+    const row = companyData[0] || {};
+    const rawEmployees = row.allEmployees || [];
+    const userIds = rawEmployees.map((e) => e._id).filter(Boolean);
+
+    let byUserMap = {};
+    let repoTotals = { n: 0, v: 0, u: 0 };
+
+    if (userIds.length > 0) {
+      const objectIds = userIds.map((id) =>
+        id instanceof mongoose.Types.ObjectId ? id : new mongoose.Types.ObjectId(id)
+      );
+
+      const byUserRepos = await Repository.aggregate([
+        { $match: { userId: { $in: objectIds } } },
+        {
+          $group: {
+            _id: "$userId",
+            lastScanned: { $max: "$LastScanned" },
+            repoCount: { $sum: 1 },
+            vulnCount: { $sum: { $cond: [{ $eq: ["$Status", "Vulnerable"] }, 1, 0] } }
+          }
+        }
+      ]);
+      byUserMap = Object.fromEntries(byUserRepos.map((d) => [d._id.toString(), d]));
+
+      const sumAgg = await Repository.aggregate([
+        { $match: { userId: { $in: objectIds } } },
+        {
+          $group: {
+            _id: null,
+            n: { $sum: 1 },
+            v: { $sum: { $ifNull: ["$VerifiedRepositories", 0] } },
+            u: { $sum: { $ifNull: ["$UnverifiedRepositories", 0] } }
+          }
+        }
+      ]);
+      if (sumAgg[0]) {
+        repoTotals = { n: sumAgg[0].n, v: sumAgg[0].v, u: sumAgg[0].u };
+      }
+    }
+
+    const employees = rawEmployees.map((e) => {
+      const id = e._id?.toString?.() ?? String(e._id);
+      const r = byUserMap[id];
+      const lastScanned = r?.lastScanned ?? null;
+      let status = "Pending";
+      if (r?.repoCount > 0) {
+        status = r.vulnCount > 0 ? "Vulnerable" : "Safe";
+      }
+      return { ...e, LastScanned: lastScanned, Status: status };
+    });
+
+    const vulnerableAccounts = employees.filter((e) => e.Status === "Vulnerable").length;
+    const scannedMembersCount = employees.filter((e) => !!e.LastScanned).length;
+
+    const { allEmployees: _omitEmployees, ...companyRest } = row;
+    const compnaydatas = {
+      ...companyRest,
+      employees,
+      vulnerableCount: vulnerableAccounts,
+      loggedInCount: scannedMembersCount,
+      dashboardStats: {
+        totalRepositories: repoTotals.n,
+        verifiedRepositories: repoTotals.v,
+        unverifiedRepositories: repoTotals.u,
+        vulnerableAccounts,
+        scannedMembersCount
+      }
+    };
+
     return res.json({
       success: true,
       message: "Company Data with Employee Counts",
-      compnaydatas: companyData[0] || {}
+      compnaydatas
     });
 
   } catch (error) {

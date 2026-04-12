@@ -162,9 +162,9 @@ const ShieldCheckIcon = () => (
 // --- CSS Animations ---
 const styles = `
 .radar-loader { width: 48px; height: 48px; border-radius: 50%; position: relative; display: inline-block; }
-.radar-loader::before, .radar-loader::after { content: ""; position: absolute; inset: 0; border-radius: 50%; animation: radar 1.6s linear infinite; border: 2px solid rgba(6, 182, 212, 0.4); }
+.radar-loader::before, .radar-loader::after { content: ""; position: absolute; inset: 0; border-radius: 50%; animation: radar 1.6s linear infinite; border: 2px solid rgba(37, 99, 235, 0.35); }
 .radar-loader::after { animation-delay: .4s; transform: scale(.6); }
-.radar-inner { width: 14px; height: 14px; background: #06b6d4; position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); border-radius: 50%; box-shadow: 0 0 15px rgba(6, 182, 212, 0.8); }
+.radar-inner { width: 14px; height: 14px; background: #2563eb; position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); border-radius: 50%; box-shadow: 0 0 10px rgba(37, 99, 235, 0.4); }
 @keyframes radar { 0% { transform: scale(.2); opacity: 1; } 100% { transform: scale(1.8); opacity: 0; } }
 `;
 
@@ -346,6 +346,53 @@ const isClean = (r: ScanResults | null) => {
   return (r.summary?.secretsFound ?? 0) === 0 && (r.summary?.filesWithSecrets ?? 0) === 0;
 };
 
+function UnifiedDiffLines({ lines }: { lines: string[] }) {
+  return (
+    <>
+      {lines.map((line, index) => {
+        const isAdd = line.startsWith("+") && !line.startsWith("+++");
+        const isRemove = line.startsWith("-") && !line.startsWith("---");
+        const isHunk = line.startsWith("@@");
+        const isMeta =
+          line.startsWith("diff ") || line.startsWith("index ") || line.startsWith("---") || line.startsWith("+++");
+        const bgClass = isAdd
+          ? "bg-emerald-500/10"
+          : isRemove
+            ? "bg-rose-500/10"
+            : isHunk
+              ? "bg-blue-500/10"
+              : "bg-transparent";
+        const textClass = isAdd
+          ? "text-emerald-300"
+          : isRemove
+            ? "text-rose-300"
+            : isHunk
+              ? "text-blue-300"
+              : isMeta
+                ? "text-slate-400"
+                : "text-slate-200";
+        const markerClass = isAdd
+          ? "text-emerald-400"
+          : isRemove
+            ? "text-rose-400"
+            : isHunk
+              ? "text-blue-400"
+              : "text-slate-600";
+
+        return (
+          <div
+            key={`d-${index}-${String(line).slice(0, 24)}`}
+            className={`grid grid-cols-[56px_1fr] border-b border-zinc-800/60 ${bgClass}`}
+          >
+            <div className={`px-3 py-1.5 text-right select-none ${markerClass}`}>{index + 1}</div>
+            <div className={`px-3 py-1.5 whitespace-pre-wrap break-words ${textClass}`}>{line || " "}</div>
+          </div>
+        );
+      })}
+    </>
+  );
+}
+
 export default function Analysis() {
   const { user, setUser, refreshUser } = userAuth() || { user: null, setUser: () => {}, refreshUser: () => {} };
   const [gitUrl, setGitUrl] = useState<string>("");
@@ -371,6 +418,7 @@ export default function Analysis() {
   const [lastCommitSha, setLastCommitSha] = useState<string | null>(null);
   const [guardStatus, setGuardStatus] = useState<GuardStatus | null>(null);
   const [guardCheck, setGuardCheck] = useState<GuardCheck | null>(null);
+  const [diffModalOpen, setDiffModalOpen] = useState(false);
   const PAGE_SIZE = 6;
 
   const axiosInstance = axios.create({
@@ -437,6 +485,19 @@ export default function Analysis() {
   useEffect(() => {
     setOpenCodeRowKey(null);
   }, [page]);
+
+  useEffect(() => {
+    if (!diffModalOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setDiffModalOpen(false);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [diffModalOpen]);
+
+  useEffect(() => {
+    if (!patchDiff) setDiffModalOpen(false);
+  }, [patchDiff]);
 
   const handleScan = async (scanType: "url" | "zip", payload: any) => {
     setLoading(true);
@@ -897,40 +958,74 @@ export default function Analysis() {
   };
 
   return (
-    <div className="min-h-screen bg-[#020617] text-slate-200 font-sans selection:bg-cyan-500/30 pb-20">
+    <div className="min-h-screen bg-zinc-950 text-zinc-200 font-sans selection:bg-blue-500/20 pb-16">
       <style>{styles}</style>
 
       {/* Top Header Navigation */}
-      <header className="border-b border-slate-800/80 bg-[#020617]/90 backdrop-blur-xl sticky top-0 z-40">
+      <header className="border-b border-zinc-800 bg-zinc-950/95 backdrop-blur-sm sticky top-0 z-40">
         <div className="max-w-7xl mx-auto px-6 py-4">
-          <div className="rounded-[24px] border border-slate-800 bg-[radial-gradient(circle_at_top_left,rgba(6,182,212,0.16),transparent_26%),linear-gradient(135deg,rgba(15,23,42,0.98),rgba(2,6,23,0.98))] px-5 py-4 shadow-[0_20px_50px_rgba(2,6,23,0.35)]">
+          <div className="rounded-lg border border-zinc-800 bg-zinc-900/60 px-5 py-4">
             <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
-              <div className="flex items-center gap-3">
-                <div className="w-12 h-12 bg-gradient-to-br from-cyan-400 to-blue-600 rounded-2xl flex items-center justify-center shadow-[0_0_20px_rgba(6,182,212,0.35)]">
-                  <span className="text-white font-black text-2xl">S</span>
-                </div>
-                <div>
-                  <h1 className="text-2xl font-black text-white tracking-[0.04em]">SECURE<span className="text-cyan-400">SCAN</span></h1>
-                  <p className="text-[10px] text-slate-400 font-mono uppercase tracking-[0.28em] mt-1">Enterprise Threat Analysis</p>
-                </div>
+              <div className="flex items-center gap-1">
+                {workflowSteps.map((step, idx) => {
+                  const isDone = step.state === "done";
+                  const isActive = step.state === "active";
+                  return (
+                    <React.Fragment key={step.label}>
+                      <div className="flex flex-col items-center" title={`${step.label}: ${step.detail}`}>
+                        <div
+                          className={`w-9 h-9 rounded-full flex items-center justify-center text-sm font-bold border-2 transition-all duration-300 ${
+                            isDone
+                              ? "border-emerald-400 bg-emerald-500/20 text-emerald-300 shadow-[0_0_10px_rgba(52,211,153,0.25)]"
+                              : isActive
+                              ? "border-blue-400 bg-blue-500/20 text-blue-300 animate-pulse shadow-[0_0_10px_rgba(96,165,250,0.25)]"
+                              : "border-zinc-600 bg-zinc-800/50 text-zinc-500"
+                          }`}
+                        >
+                          {isDone ? (
+                            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
+                              <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+                            </svg>
+                          ) : (
+                            idx + 1
+                          )}
+                        </div>
+                        <span className={`text-[9px] mt-1 font-semibold uppercase tracking-wider ${
+                          isDone ? "text-emerald-400" : isActive ? "text-blue-400" : "text-zinc-500"
+                        }`}>
+                          {step.label}
+                        </span>
+                      </div>
+                      {idx < workflowSteps.length - 1 && (
+                        <div
+                          className={`h-0.5 w-8 mb-4 rounded-full transition-all duration-300 ${
+                            workflowSteps[idx + 1].state === "done" || workflowSteps[idx].state === "done"
+                              ? "bg-emerald-500/50"
+                              : "bg-zinc-700"
+                          }`}
+                        />
+                      )}
+                    </React.Fragment>
+                  );
+                })}
               </div>
 
               <div className="flex flex-col gap-3 lg:items-end">
                 <div className="flex flex-wrap items-center gap-3">
-                  <div className="rounded-2xl border border-slate-800 bg-[#020617]/90 px-4 py-3 min-w-[180px]">
-                    <p className="text-[10px] text-slate-500 uppercase font-bold tracking-[0.22em]">Engine Status</p>
+                  <div className="rounded-lg border border-zinc-800 bg-zinc-950/80 px-4 py-3 min-w-[180px]">
+                    <p className="text-[10px] text-zinc-500 uppercase font-semibold tracking-wide">Engine status</p>
                     <div className="flex items-center gap-2 mt-2">
-                      {loading && <div className="w-2.5 h-2.5 rounded-full bg-cyan-400 animate-pulse" />}
+                      {loading && <div className="w-2.5 h-2.5 rounded-full bg-blue-400 animate-pulse" />}
                       {!loading && <div className={`w-2.5 h-2.5 rounded-full ${results?.error ? 'bg-rose-500' : isClean(results) ? 'bg-emerald-500' : results ? 'bg-amber-500' : 'bg-slate-600'}`} />}
-                      <p className={`text-sm font-bold ${loading ? "text-cyan-400" : results?.error ? "text-rose-400" : isClean(results) ? "text-emerald-400" : results ? "text-amber-400" : "text-slate-400"}`}>
+                      <p className={`text-sm font-bold ${loading ? "text-blue-400" : results?.error ? "text-rose-400" : isClean(results) ? "text-emerald-400" : results ? "text-amber-400" : "text-slate-400"}`}>
                         {loading ? "Analyzing..." : results?.error ? "System Error" : isClean(results) ? "System Secure" : results ? "Vulnerabilities Found" : "Standby"}
                       </p>
                     </div>
                   </div>
 
-                  <div className="rounded-2xl border border-slate-800 bg-[#020617]/90 px-4 py-3 min-w-[150px]">
-                    <p className="text-[10px] text-slate-500 uppercase font-bold tracking-[0.22em]">AI Confidence</p>
-                    <p className="text-lg font-semibold text-cyan-300 mt-2">
+                  <div className="rounded-lg border border-zinc-800 bg-zinc-950/80 px-4 py-3 min-w-[150px]">
+                    <p className="text-[10px] text-zinc-500 uppercase font-semibold tracking-wide">Analyzer</p>
+                    <p className="text-lg font-semibold text-blue-300 mt-2">
                       {aiSummary.scoredCount > 0 ? `${aiSummary.avgConfidence}% avg` : "Not scored"}
                     </p>
                     <p className="text-[11px] text-slate-500 mt-1">
@@ -941,7 +1036,7 @@ export default function Analysis() {
                   {loading ? (
                     <div className="radar-loader" aria-hidden><div className="radar-inner" /></div>
                   ) : results && !results.error && !isClean(results) && (
-                    <button onClick={generatePDFReport} className="px-4 py-3 rounded-2xl bg-amber-500 hover:bg-amber-400 text-black font-bold text-xs shadow-[0_0_15px_rgba(245,158,11,0.3)] transition-all flex items-center">
+                    <button onClick={generatePDFReport} className="px-4 py-2.5 rounded-md bg-amber-600 hover:bg-amber-500 text-white font-medium text-xs transition-colors flex items-center">
                       <DownloadIcon /> Export PDF
                     </button>
                   )}
@@ -957,7 +1052,7 @@ export default function Analysis() {
         {/* Input Section */}
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           {/* URL Card */}
-          <div className="p-6 rounded-2xl border border-slate-800 bg-[#0f172a]/50 backdrop-blur-sm shadow-xl">
+          <div className="p-6 rounded-lg border border-zinc-800 bg-zinc-900/60 backdrop-blur-sm shadow-xl">
             <h2 className="text-sm font-bold text-slate-300 mb-4 uppercase tracking-wider flex items-center gap-2">
               <LinkIcon /> Remote Repository Scan
             </h2>
@@ -967,20 +1062,20 @@ export default function Analysis() {
                 value={gitUrl}
                 onChange={(e) => setGitUrl(e.target.value)}
                 placeholder="https://github.com/organization/repo.git"
-                className="flex-1 px-4 py-2.5 rounded-xl bg-[#020617] border border-slate-700 focus:border-cyan-500 text-sm outline-none transition-colors"
+                className="flex-1 px-4 py-2.5 rounded-xl bg-zinc-950 border border-zinc-700 focus:border-blue-500 text-sm outline-none transition-colors"
               />
-              <button type="submit" disabled={loading} className="px-6 py-2.5 rounded-xl bg-cyan-500 hover:bg-cyan-400 disabled:opacity-50 text-black font-bold text-sm transition-colors">
+              <button type="submit" disabled={loading} className="px-6 py-2.5 rounded-md bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white font-medium text-sm transition-colors">
                 Initialize Scan
               </button>
             </form>
           </div>
 
           {/* ZIP Card */}
-          <div className="p-6 rounded-2xl border border-slate-800 bg-[#0f172a]/50 backdrop-blur-sm shadow-xl">
+          <div className="p-6 rounded-lg border border-zinc-800 bg-zinc-900/60 backdrop-blur-sm shadow-xl">
             <h2 className="text-sm font-bold text-slate-300 mb-4 uppercase tracking-wider flex items-center gap-2">
               <UploadIcon /> Local Archive Upload
             </h2>
-            <form onSubmit={handleZipSubmit} className="flex items-center gap-4 bg-[#020617] border border-slate-700 rounded-xl px-2 py-1.5 pl-4">
+            <form onSubmit={handleZipSubmit} className="flex items-center gap-4 bg-zinc-950 border border-zinc-700 rounded-xl px-2 py-1.5 pl-4">
               <input
                 type="file"
                 accept=".zip"
@@ -996,7 +1091,7 @@ export default function Analysis() {
 
         {/* Secure Banner */}
         {results && isClean(results) && !loading && !results.error && (
-          <div className="p-5 rounded-2xl border border-emerald-500/30 bg-emerald-500/10 shadow-[0_0_30px_rgba(16,185,129,0.1)] flex items-center gap-4">
+          <div className="p-5 rounded-lg border border-emerald-500/30 bg-emerald-500/10 shadow-[0_0_30px_rgba(16,185,129,0.1)] flex items-center gap-4">
             <ShieldCheckIcon />
             <div>
               <h3 className="text-emerald-400 font-bold text-lg">System Secure: Zero Vulnerabilities Detected</h3>
@@ -1007,16 +1102,16 @@ export default function Analysis() {
 
         {results?.scanMeta && !results.error && (
           <section className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
-            <div className="rounded-2xl border border-slate-800 bg-[#0f172a]/60 p-4">
+            <div className="rounded-lg border border-zinc-800 bg-zinc-900/70 p-4">
               <p className="text-[10px] uppercase tracking-[0.22em] text-slate-500 font-bold">Scan Timeline</p>
               <p className="text-lg font-semibold text-white mt-2">
                 {formatTimestamp(scanMeta?.scannedAt)}
               </p>
               <p className="text-xs text-slate-500 mt-2 capitalize">{scanMeta?.mode?.replace(/-/g, " ") || "scan"}</p>
             </div>
-            <div className="rounded-2xl border border-slate-800 bg-[#0f172a]/60 p-4">
+            <div className="rounded-lg border border-zinc-800 bg-zinc-900/70 p-4">
               <p className="text-[10px] uppercase tracking-[0.22em] text-slate-500 font-bold">AI Validation</p>
-              <p className="text-lg font-semibold text-cyan-300 mt-2">
+              <p className="text-lg font-semibold text-blue-300 mt-2">
                 {scanMeta?.analyzer?.reviewedCount ?? 0} reviewed
               </p>
               <p className="text-xs text-slate-500 mt-2">
@@ -1026,7 +1121,7 @@ export default function Analysis() {
                 Source: {(scanMeta?.analyzer?.url || "https://secure-scan-ai-risk.onrender.com/analyze").replace(/^https?:\/\//, "")}
               </p>
             </div>
-            <div className="rounded-2xl border border-slate-800 bg-[#0f172a]/60 p-4">
+            <div className="rounded-lg border border-zinc-800 bg-zinc-900/70 p-4">
               <p className="text-[10px] uppercase tracking-[0.22em] text-slate-500 font-bold">Branch Snapshot</p>
               <p className="text-lg font-semibold text-white mt-2 font-mono">
                 {remediation?.lastBranchName || remediation?.currentBranch || "main"}
@@ -1037,7 +1132,7 @@ export default function Analysis() {
                   : "Branch will be created once a patch is committed"}
               </p>
             </div>
-            <div className={`rounded-2xl border p-4 ${verificationPerformed ? verificationRemaining === 0 ? "border-emerald-500/20 bg-emerald-500/10" : "border-amber-500/20 bg-amber-500/10" : "border-slate-800 bg-[#0f172a]/60"}`}>
+            <div className={`rounded-lg border p-4 ${verificationPerformed ? verificationRemaining === 0 ? "border-emerald-500/20 bg-emerald-500/10" : "border-amber-500/20 bg-amber-500/10" : "border-zinc-800 bg-zinc-900/70"}`}>
               <p className="text-[10px] uppercase tracking-[0.22em] text-slate-500 font-bold">Verification Scan</p>
               <p className={`text-lg font-semibold mt-2 ${verificationPerformed ? verificationRemaining === 0 ? "text-emerald-300" : "text-amber-300" : "text-slate-300"}`}>
                 {verificationPerformed ? verificationRemaining === 0 ? "No secrets remain" : `${verificationRemaining} still detected` : "Waiting for push"}
@@ -1052,12 +1147,12 @@ export default function Analysis() {
         )}
 
         {results?.remediation && !results.error && (
-          <section className="p-6 rounded-[28px] border border-cyan-500/10 bg-[radial-gradient(circle_at_top_left,rgba(6,182,212,0.14),transparent_32%),linear-gradient(180deg,rgba(15,23,42,0.96),rgba(2,6,23,0.98))] shadow-[0_24px_80px_rgba(2,6,23,0.45)] space-y-5">
+          <section className="p-5 rounded-lg border border-zinc-800 bg-zinc-900/50 space-y-5">
             <div className="flex flex-col xl:flex-row xl:items-start xl:justify-between gap-4">
               <div>
                 <div className="flex flex-wrap items-center gap-2">
                   <h3 className="text-sm font-bold text-white uppercase tracking-widest">Patch Agent</h3>
-                  <span className="px-2.5 py-1 rounded-full border border-cyan-400/20 bg-cyan-500/10 text-[10px] font-bold uppercase tracking-[0.22em] text-cyan-300">
+                  <span className="px-2.5 py-1 rounded-full border border-blue-400/20 bg-blue-500/10 text-[10px] font-bold uppercase tracking-[0.22em] text-blue-300">
                     {results.remediation.sourceType === "git" ? "Live Git Workspace" : "Local ZIP Workspace"}
                   </span>
                   <span className={`px-2.5 py-1 rounded-full border text-[10px] font-bold uppercase tracking-[0.22em] ${results.remediation.canPush ? "border-emerald-400/20 bg-emerald-500/10 text-emerald-300" : "border-amber-400/20 bg-amber-500/10 text-amber-300"}`}>
@@ -1071,92 +1166,31 @@ export default function Analysis() {
                   Session: {results.remediation.sessionId} • Source: {results.remediation.sourceType === "git" ? "Git repository" : "ZIP workspace"}
                 </p>
               </div>
-              <div className="flex flex-wrap gap-2 rounded-2xl border border-slate-800/80 bg-black/15 p-2">
-                <button
-                  type="button"
-                  onClick={() => handlePatchPreview(true)}
-                  disabled={!canUsePatchAgent || patchBusyKey !== null}
-                  className="px-4 py-2 rounded-lg border border-slate-700 text-xs font-semibold text-slate-200 hover:border-cyan-500/50 hover:bg-slate-800 disabled:opacity-50"
-                >
-                  {patchBusyKey === "preview" ? "Previewing..." : "Preview All"}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => handlePatchApply()}
-                  disabled={!canUsePatchAgent || patchBusyKey !== null}
-                  className="px-4 py-2 rounded-lg bg-cyan-500 text-black text-xs font-bold hover:bg-cyan-400 disabled:opacity-50"
-                >
-                  {patchBusyKey === "all" ? "Patching..." : "Patch All"}
-                </button>
-                <button
-                  type="button"
-                  onClick={handleRefreshDiff}
-                  disabled={!canUsePatchAgent || patchBusyKey !== null}
-                  className="px-4 py-2 rounded-lg border border-slate-700 text-xs font-semibold text-slate-200 hover:border-cyan-500/50 hover:bg-slate-800 disabled:opacity-50"
-                >
-                  {patchBusyKey === "diff" ? "Loading..." : "Review Diff"}
-                </button>
-                <button
-                  type="button"
-                  onClick={handleRollbackPatch}
-                  disabled={!results.remediation.canCommit || !lastCommitSha || patchBusyKey !== null}
-                  className="px-4 py-2 rounded-lg border border-rose-500/40 text-xs font-semibold text-rose-300 hover:bg-rose-500/10 disabled:opacity-50"
-                >
-                  {patchBusyKey === "rollback" ? "Rolling Back..." : "Rollback"}
-                </button>
-              </div>
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
-              {workflowSteps.map((step) => (
-                <div
-                  key={step.label}
-                  className={`rounded-2xl border p-4 ${
-                    step.state === "done"
-                      ? "border-emerald-500/20 bg-emerald-500/8"
-                      : step.state === "active"
-                      ? "border-cyan-500/30 bg-cyan-500/10"
-                      : "border-slate-800 bg-[#020617]"
-                  }`}
-                >
-                  <p className="text-[10px] uppercase tracking-[0.22em] text-slate-500 font-bold">{step.label}</p>
-                  <p
-                    className={`text-lg font-semibold mt-2 ${
-                      step.state === "done"
-                        ? "text-emerald-300"
-                        : step.state === "active"
-                        ? "text-cyan-300"
-                        : "text-slate-200"
-                    }`}
-                  >
-                    {step.state === "done" ? "Done" : step.state === "active" ? "In Progress" : "Waiting"}
-                  </p>
-                  <p className="text-xs text-slate-500 mt-2">{step.detail}</p>
-                </div>
-              ))}
-            </div>
+
 
             <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-              <div className="rounded-2xl border border-slate-800 bg-[#020617] p-4">
+              <div className="rounded-lg border border-zinc-800 bg-zinc-950 p-4">
                 <p className="text-[10px] uppercase tracking-[0.22em] text-slate-500 font-bold">Workspace Branch</p>
                 <p className="text-base font-semibold text-white mt-2 font-mono">
                   {remediation?.currentBranch || remediation?.lastBranchName || "main"}
                 </p>
               </div>
-              <div className="rounded-2xl border border-slate-800 bg-[#020617] p-4">
+              <div className="rounded-lg border border-zinc-800 bg-zinc-950 p-4">
                 <p className="text-[10px] uppercase tracking-[0.22em] text-slate-500 font-bold">Pending Changes</p>
                 <p className={`text-base font-semibold mt-2 ${hasPendingChanges ? "text-amber-300" : "text-slate-400"}`}>
                   {hasPendingChanges ? `${remediation?.changedFilesCount ?? 0} files ready to commit` : "No uncommitted changes"}
                 </p>
               </div>
-              <div className="rounded-2xl border border-slate-800 bg-[#020617] p-4">
+              <div className="rounded-lg border border-zinc-800 bg-zinc-950 p-4">
                 <p className="text-[10px] uppercase tracking-[0.22em] text-slate-500 font-bold">Last Action</p>
-                <p className="text-base font-semibold text-cyan-300 mt-2 capitalize">{remediation?.lastOperation || "scan"}</p>
+                <p className="text-base font-semibold text-blue-300 mt-2 capitalize">{remediation?.lastOperation || "scan"}</p>
               </div>
             </div>
 
             {branchFiles.length > 0 && (
-              <div className="rounded-2xl border border-slate-800 bg-[#020617] p-4">
+              <div className="rounded-lg border border-zinc-800 bg-zinc-950 p-4">
                 <div className="flex items-center justify-between gap-3">
                   <div>
                     <p className="text-[10px] uppercase tracking-[0.22em] text-slate-500 font-bold">Branch Changes</p>
@@ -1166,18 +1200,18 @@ export default function Analysis() {
                         : "Files preserved from the latest remediation commit or push."}
                     </p>
                   </div>
-                  <span className="px-2.5 py-1 rounded-full border border-slate-700 text-[10px] font-bold uppercase tracking-[0.18em] text-slate-300">
+                  <span className="px-2.5 py-1 rounded-full border border-zinc-700 text-[10px] font-bold uppercase tracking-[0.18em] text-slate-300">
                     {branchFilesCount} files
                   </span>
                 </div>
                 <div className="mt-4 flex flex-wrap gap-2">
                   {branchFiles.slice(0, 8).map((file) => (
-                    <span key={file} className="px-3 py-1.5 rounded-full border border-slate-800 bg-slate-950/50 text-[11px] font-mono text-slate-300">
+                    <span key={file} className="px-3 py-1.5 rounded-full border border-zinc-800 bg-slate-950/50 text-[11px] font-mono text-slate-300">
                       {file}
                     </span>
                   ))}
                   {branchFiles.length > 8 && (
-                    <span className="px-3 py-1.5 rounded-full border border-slate-800 bg-slate-950/50 text-[11px] font-semibold text-slate-400">
+                    <span className="px-3 py-1.5 rounded-full border border-zinc-800 bg-slate-950/50 text-[11px] font-semibold text-slate-400">
                       +{branchFiles.length - 8} more
                     </span>
                   )}
@@ -1186,7 +1220,7 @@ export default function Analysis() {
             )}
 
             {results.remediation.sourceType === "git" && (
-              <div className="rounded-2xl border border-slate-800 bg-[#020617] p-4">
+              <div className="rounded-lg border border-zinc-800 bg-zinc-950 p-4">
                 <div className="flex flex-col xl:flex-row xl:items-start xl:justify-between gap-4">
                   <div>
                     <p className="text-[10px] uppercase tracking-[0.22em] text-slate-500 font-bold">Pre-Commit Secret Guard</p>
@@ -1194,7 +1228,7 @@ export default function Analysis() {
                       Installs a Git hook in this remediation workspace so commits are blocked if staged secrets are still present.
                     </p>
                     <div className="mt-3 flex flex-wrap items-center gap-2">
-                      <span className={`px-2.5 py-1 rounded-full border text-[10px] font-bold uppercase tracking-[0.18em] ${guardStatus?.installed ? "border-emerald-500/20 bg-emerald-500/10 text-emerald-300" : "border-slate-700 bg-slate-950 text-slate-400"}`}>
+                      <span className={`px-2.5 py-1 rounded-full border text-[10px] font-bold uppercase tracking-[0.18em] ${guardStatus?.installed ? "border-emerald-500/20 bg-emerald-500/10 text-emerald-300" : "border-zinc-700 bg-slate-950 text-slate-400"}`}>
                         {guardStatus?.installed ? "Installed" : "Not Installed"}
                       </span>
                       {guardStatus?.hookPath && (
@@ -1215,7 +1249,7 @@ export default function Analysis() {
                       type="button"
                       onClick={handleGuardCheck}
                       disabled={!canUsePatchAgent || patchBusyKey !== null}
-                      className="px-3 py-2 rounded-xl border border-slate-700 text-[11px] font-semibold text-slate-200 hover:bg-slate-800 disabled:opacity-50"
+                      className="px-3 py-2 rounded-xl border border-zinc-700 text-[11px] font-semibold text-slate-200 hover:bg-slate-800 disabled:opacity-50"
                     >
                       {patchBusyKey === "guard-check" ? "Checking..." : "Check Staged Changes"}
                     </button>
@@ -1231,7 +1265,7 @@ export default function Analysis() {
                 </div>
 
                 {guardCheck && (
-                  <div className={`mt-4 rounded-2xl border p-4 ${guardCheck.blocked ? "border-rose-500/20 bg-rose-500/8" : "border-emerald-500/20 bg-emerald-500/8"}`}>
+                  <div className={`mt-4 rounded-lg border p-4 ${guardCheck.blocked ? "border-rose-500/20 bg-rose-500/8" : "border-emerald-500/20 bg-emerald-500/8"}`}>
                     <p className={`text-[10px] uppercase tracking-[0.22em] font-bold ${guardCheck.blocked ? "text-rose-300" : "text-emerald-300"}`}>
                       {guardCheck.blocked ? "Commit Would Be Blocked" : "Commit Would Be Allowed"}
                     </p>
@@ -1241,7 +1275,7 @@ export default function Analysis() {
                     {guardCheck.findings.length > 0 && (
                       <div className="mt-3 flex flex-col gap-2">
                         {guardCheck.findings.slice(0, 5).map((finding, index) => (
-                          <div key={`${finding.file}-${finding.line}-${index}`} className="rounded-xl border border-slate-800 bg-slate-950/70 px-3 py-2 text-[11px] text-slate-300 font-mono">
+                          <div key={`${finding.file}-${finding.line}-${index}`} className="rounded-xl border border-zinc-800 bg-slate-950/70 px-3 py-2 text-[11px] text-slate-300 font-mono">
                             {finding.file}:{finding.line} [{finding.type}]
                           </div>
                         ))}
@@ -1253,12 +1287,12 @@ export default function Analysis() {
             )}
 
             {showShipPanel && (
-              <div className="rounded-2xl border border-emerald-500/15 bg-[linear-gradient(180deg,rgba(16,185,129,0.07),rgba(2,6,23,0.92))] p-4">
+              <div className="rounded-lg border border-emerald-500/15 bg-[linear-gradient(180deg,rgba(16,185,129,0.07),rgba(2,6,23,0.92))] p-4">
                 <div className="flex flex-col xl:flex-row xl:items-start xl:justify-between gap-4">
                   <div>
                     <div className="flex flex-wrap items-center gap-2">
                       <p className="text-[10px] uppercase tracking-[0.24em] text-emerald-300 font-bold">Ship Fix</p>
-                      <span className={`px-2.5 py-1 rounded-full border text-[10px] font-bold uppercase tracking-[0.2em] ${hasPendingChanges ? "border-emerald-400/20 bg-emerald-500/10 text-emerald-300" : "border-slate-700 bg-slate-900 text-slate-300"}`}>
+                      <span className={`px-2.5 py-1 rounded-full border text-[10px] font-bold uppercase tracking-[0.2em] ${hasPendingChanges ? "border-emerald-400/20 bg-emerald-500/10 text-emerald-300" : "border-zinc-700 bg-slate-900 text-slate-300"}`}>
                         {hasPendingChanges ? "Ready To Commit" : hasCommittedRemediation ? "Commit Created" : "Waiting"}
                       </span>
                     </div>
@@ -1266,7 +1300,7 @@ export default function Analysis() {
                       After patching, ship the secure fix to GitHub from here. We keep this step separate so the first scan experience stays focused and clean.
                     </p>
                     {hasPendingChanges && (
-                      <div className="mt-4 inline-flex rounded-xl border border-slate-800 bg-[#020617] p-1">
+                      <div className="mt-4 inline-flex rounded-xl border border-zinc-800 bg-zinc-950 p-1">
                         <button
                           type="button"
                           onClick={() => setShipMode("commit")}
@@ -1297,7 +1331,7 @@ export default function Analysis() {
                         : "Choose commit only if you want to review the branch locally before pushing it to GitHub."}
                     </p>
                   </div>
-                  <div className="w-full xl:w-[360px] rounded-2xl border border-emerald-500/10 bg-black/15 p-3 space-y-3">
+                  <div className="w-full xl:w-[360px] rounded-lg border border-emerald-500/10 bg-black/15 p-3 space-y-3">
                     <div>
                       <label className="text-[10px] uppercase tracking-widest text-slate-500 font-bold block mb-2">Target Branch</label>
                       <input
@@ -1305,7 +1339,7 @@ export default function Analysis() {
                         value={branchName}
                         onChange={(e) => setBranchName(e.target.value)}
                         placeholder="secure/fix-secrets-2026-04-12"
-                        className="w-full px-4 py-3 rounded-xl bg-[#020617] border border-slate-700 text-sm text-white outline-none focus:border-cyan-500"
+                        className="w-full px-4 py-3 rounded-xl bg-zinc-950 border border-zinc-700 text-sm text-white outline-none focus:border-blue-500"
                       />
                       <p className="text-[11px] text-slate-500 mt-2">
                         The remediation commit and push will use this branch name.
@@ -1331,7 +1365,7 @@ export default function Analysis() {
                       <button
                         type="button"
                         onClick={() => setShowShipAdvanced((v) => !v)}
-                        className="px-4 py-2 rounded-lg border border-slate-700 text-xs font-semibold text-slate-200 hover:border-cyan-500/40 hover:bg-slate-800"
+                        className="px-4 py-2 rounded-lg border border-zinc-700 text-xs font-semibold text-slate-200 hover:border-blue-500/40 hover:bg-slate-800"
                       >
                         {showShipAdvanced ? "Hide Options" : "Advanced"}
                       </button>
@@ -1349,13 +1383,13 @@ export default function Analysis() {
                     type="text"
                     value={commitMessage}
                     onChange={(e) => setCommitMessage(e.target.value)}
-                    className="w-full px-4 py-3 rounded-xl bg-[#020617] border border-slate-700 text-sm text-white outline-none focus:border-cyan-500"
+                    className="w-full px-4 py-3 rounded-xl bg-zinc-950 border border-zinc-700 text-sm text-white outline-none focus:border-blue-500"
                   />
                 </div>
               </div>
             )}
 
-            <div className="rounded-2xl border border-slate-800 bg-[#020617] p-4 space-y-4">
+            <div className="rounded-lg border border-zinc-800 bg-zinc-950 p-4 space-y-4">
               <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1.4fr)_minmax(280px,0.6fr)] gap-4 items-start">
                 <div>
                   <label className="text-[10px] uppercase tracking-widest text-slate-500 font-bold block mb-2">GitHub Token For Push</label>
@@ -1372,7 +1406,7 @@ export default function Analysis() {
                         ? "Token not needed for commit-only mode"
                         : "Push disabled for ZIP workspace"
                     }
-                    className="w-full px-4 py-3 rounded-xl bg-[#010616] border border-slate-700 text-sm text-white outline-none focus:border-cyan-500 disabled:opacity-50"
+                    className="w-full px-4 py-3 rounded-md bg-zinc-950 border border-zinc-700 text-sm text-white outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500/30 disabled:opacity-50 transition-shadow"
                     disabled={!results.remediation.canPush || !showShipPanel || effectiveShipMode !== "push"}
                   />
                   <div className="mt-3 flex flex-wrap items-center gap-3">
@@ -1381,7 +1415,7 @@ export default function Analysis() {
                         type="checkbox"
                         checked={saveGithubToken}
                         onChange={(e) => setSaveGithubToken(e.target.checked)}
-                        className="h-4 w-4 rounded border-slate-600 bg-[#020617] text-cyan-500 focus:ring-cyan-500"
+                        className="h-4 w-4 rounded border-slate-600 bg-zinc-950 text-blue-500 focus:ring-blue-500"
                       />
                       Save token locally on this device
                     </label>
@@ -1389,7 +1423,7 @@ export default function Analysis() {
                       <button
                         type="button"
                         onClick={() => setGithubToken("")}
-                        className="px-3 py-1.5 rounded-lg border border-slate-700 text-[11px] font-semibold text-slate-300 hover:bg-slate-800"
+                        className="px-3 py-1.5 rounded-lg border border-zinc-700 text-[11px] font-semibold text-slate-300 hover:bg-slate-800"
                       >
                         Clear token
                       </button>
@@ -1398,11 +1432,11 @@ export default function Analysis() {
                 </div>
 
                 <div className="grid grid-cols-2 gap-3">
-                  <div className="rounded-xl border border-slate-800 bg-slate-950/60 p-3">
+                  <div className="rounded-xl border border-zinc-800 bg-slate-950/60 p-3">
                     <p className="text-[10px] uppercase tracking-widest text-slate-500 font-bold">Patchable</p>
                     <p className="text-lg font-semibold text-white mt-2">{results.remediation.patchable ? "Yes" : "No"}</p>
                   </div>
-                  <div className="rounded-xl border border-slate-800 bg-slate-950/60 p-3">
+                  <div className="rounded-xl border border-zinc-800 bg-slate-950/60 p-3">
                     <p className="text-[10px] uppercase tracking-widest text-slate-500 font-bold">Saved Token</p>
                     <p className={`text-lg font-semibold mt-2 ${githubToken ? "text-emerald-300" : "text-slate-500"}`}>
                       {githubToken ? "Loaded" : githubTokenLoaded ? "Not saved" : "Checking"}
@@ -1412,20 +1446,20 @@ export default function Analysis() {
               </div>
 
               <div className="grid grid-cols-1 xl:grid-cols-3 gap-3">
-                <div className="rounded-xl border border-cyan-500/15 bg-cyan-500/5 p-3 xl:col-span-1">
-                  <p className="text-[10px] uppercase tracking-widest text-cyan-300 font-bold">Push Token Needed</p>
+                <div className="rounded-xl border border-blue-500/15 bg-blue-500/5 p-3 xl:col-span-1">
+                  <p className="text-[10px] uppercase tracking-widest text-blue-300 font-bold">Push Token Needed</p>
                   <p className="text-xs text-slate-300 mt-2 leading-5">
                     Fine-grained token, this repo selected, <span className="font-mono text-white">Contents: Read and write</span>.
                   </p>
                 </div>
-                <div className="rounded-xl border border-slate-800 bg-slate-950/40 p-3 xl:col-span-1">
+                <div className="rounded-xl border border-zinc-800 bg-slate-950/40 p-3 xl:col-span-1">
                   <p className="text-[10px] uppercase tracking-widest text-slate-500 font-bold">Workflow</p>
                   <p className="text-xs text-slate-300 mt-2 leading-5">
                     Preview, patch, review diff, then commit or push only after approval.
                   </p>
                 </div>
-                <div className={`rounded-xl border p-3 xl:col-span-1 ${showShipPanel ? hasPendingChanges ? "border-emerald-500/20 bg-emerald-500/8" : "border-cyan-500/20 bg-cyan-500/8" : "border-amber-500/20 bg-amber-500/8"}`}>
-                  <p className={`text-[10px] uppercase tracking-widest font-bold ${showShipPanel ? hasPendingChanges ? "text-emerald-300" : "text-cyan-300" : "text-amber-300"}`}>
+                <div className={`rounded-xl border p-3 xl:col-span-1 ${showShipPanel ? hasPendingChanges ? "border-emerald-500/20 bg-emerald-500/8" : "border-blue-500/20 bg-blue-500/8" : "border-amber-500/20 bg-amber-500/8"}`}>
+                  <p className={`text-[10px] uppercase tracking-widest font-bold ${showShipPanel ? hasPendingChanges ? "text-emerald-300" : "text-blue-300" : "text-amber-300"}`}>
                     {showShipPanel ? hasPendingChanges ? "Ready To Commit" : "Ready To Push" : "Commit Disabled"}
                   </p>
                   <p className="text-xs text-slate-300 mt-2 leading-5">
@@ -1447,16 +1481,16 @@ export default function Analysis() {
 
             {(patchPreviews.length > 0 || patchDiff) && (
               <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
-                <div className="rounded-xl border border-slate-800 bg-[#020617] p-4 max-h-80 overflow-y-auto">
+                <div className="rounded-xl border border-zinc-800 bg-zinc-950 p-4 max-h-80 overflow-y-auto">
                   <p className="text-[10px] uppercase tracking-widest text-slate-500 font-bold mb-3">Patch Preview</p>
                   {patchPreviews.length === 0 ? (
                     <p className="text-sm text-slate-500">No preview generated yet.</p>
                   ) : (
                     <div className="space-y-3">
                       {patchPreviews.map((preview, index) => (
-                        <div key={`${preview.file}-${preview.line}-${index}`} className="rounded-lg border border-slate-800 bg-slate-950/50 p-3">
+                        <div key={`${preview.file}-${preview.line}-${index}`} className="rounded-lg border border-zinc-800 bg-slate-950/50 p-3">
                           <div className="flex items-center justify-between gap-3">
-                            <p className="text-xs font-mono text-cyan-300 break-all">{preview.file}</p>
+                            <p className="text-xs font-mono text-blue-300 break-all">{preview.file}</p>
                             <span className={`text-[10px] font-bold uppercase ${preview.status === "ready" ? "text-emerald-400" : "text-rose-400"}`}>
                               {preview.status}
                             </span>
@@ -1470,60 +1504,35 @@ export default function Analysis() {
                     </div>
                   )}
                 </div>
-                <div className="rounded-2xl border border-slate-800 bg-[#020617] overflow-hidden">
-                  <div className="px-4 py-3 border-b border-slate-800 bg-slate-950/70 flex items-center justify-between gap-3">
-                    <div>
+                <div className="rounded-lg border border-zinc-800 bg-zinc-950 overflow-hidden flex flex-col min-h-[200px]">
+                  <div className="px-4 py-3 border-b border-zinc-800 bg-zinc-950/90 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+                    <div className="min-w-0">
                       <p className="text-[10px] uppercase tracking-widest text-slate-500 font-bold">Current Diff</p>
                       <p className="text-xs text-slate-500 mt-1">GitHub-style unified diff preview for the current remediation workspace.</p>
                     </div>
-                    {diffLines.length > 0 && (
-                      <span className="px-2.5 py-1 rounded-full border border-slate-700 text-[10px] font-bold uppercase tracking-[0.18em] text-slate-300">
-                        {diffLines.length} lines
-                      </span>
-                    )}
+                    <div className="flex flex-wrap items-center gap-2 shrink-0">
+                      {diffLines.length > 0 && (
+                        <span className="px-2.5 py-1 rounded-md border border-zinc-700 text-[10px] font-semibold uppercase tracking-wide text-slate-300">
+                          {diffLines.length} lines
+                        </span>
+                      )}
+                      <button
+                        type="button"
+                        disabled={diffLines.length === 0}
+                        onClick={() => setDiffModalOpen(true)}
+                        className="px-3 py-1.5 rounded-md border border-blue-600/50 bg-blue-600/15 text-xs font-semibold text-blue-300 hover:bg-blue-600/25 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                      >
+                        {diffLines.length === 0 ? "No diff to expand" : "View diff in popup"}
+                      </button>
+                    </div>
                   </div>
                   {patchDiff ? (
-                    <div className="max-h-96 overflow-auto font-mono text-[11px]">
-                      {diffLines.map((line, index) => {
-                        const isAdd = line.startsWith("+") && !line.startsWith("+++");
-                        const isRemove = line.startsWith("-") && !line.startsWith("---");
-                        const isHunk = line.startsWith("@@");
-                        const isMeta = line.startsWith("diff ") || line.startsWith("index ") || line.startsWith("---") || line.startsWith("+++");
-                        const bgClass = isAdd
-                          ? "bg-emerald-500/10"
-                          : isRemove
-                          ? "bg-rose-500/10"
-                          : isHunk
-                          ? "bg-cyan-500/10"
-                          : "bg-transparent";
-                        const textClass = isAdd
-                          ? "text-emerald-300"
-                          : isRemove
-                          ? "text-rose-300"
-                          : isHunk
-                          ? "text-cyan-300"
-                          : isMeta
-                          ? "text-slate-400"
-                          : "text-slate-200";
-                        const markerClass = isAdd
-                          ? "text-emerald-400"
-                          : isRemove
-                          ? "text-rose-400"
-                          : isHunk
-                          ? "text-cyan-400"
-                          : "text-slate-600";
-
-                        return (
-                          <div key={`${index}-${line}`} className={`grid grid-cols-[56px_1fr] border-b border-slate-900/60 ${bgClass}`}>
-                            <div className={`px-3 py-1.5 text-right select-none ${markerClass}`}>{index + 1}</div>
-                            <div className={`px-3 py-1.5 whitespace-pre-wrap break-words ${textClass}`}>{line || " "}</div>
-                          </div>
-                        );
-                      })}
+                    <div className="max-h-96 overflow-auto font-mono text-[11px] flex-1">
+                      <UnifiedDiffLines lines={diffLines} />
                     </div>
                   ) : (
-                    <div className="p-4">
-                      <p className="text-sm text-slate-500">No diff loaded yet. Preview or apply a patch first.</p>
+                    <div className="p-4 flex-1 flex flex-col justify-center">
+                      <p className="text-sm text-slate-500">No diff loaded yet. Use <span className="text-slate-400 font-medium">Review Diff</span> after preview or patch.</p>
                     </div>
                   )}
                 </div>
@@ -1537,7 +1546,7 @@ export default function Analysis() {
           <>
             {/* Top Cards Row */}
             <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-              <div className="p-6 rounded-2xl border border-slate-800 bg-[#0f172a]/50 flex flex-col justify-center">
+              <div className="p-6 rounded-lg border border-zinc-800 bg-zinc-900/60 flex flex-col justify-center">
                 <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest">Total Exposures</p>
                 <div className="flex items-end gap-3 mt-2">
                   <p className="text-5xl font-black text-rose-500">{results?.summary?.secretsFound ?? 0}</p>
@@ -1548,7 +1557,7 @@ export default function Analysis() {
                 </div>
               </div>
 
-              <div className="p-6 rounded-2xl border border-slate-800 bg-[#0f172a]/50">
+              <div className="p-6 rounded-lg border border-zinc-800 bg-zinc-900/60">
                 <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest mb-4">Risk by File</p>
                 <div className="h-28">
                   {chartData.bar.length > 0 ? (
@@ -1556,10 +1565,10 @@ export default function Analysis() {
                       <BarChart data={chartData.bar} margin={{ left: -25, bottom: -10 }}>
                         <XAxis dataKey="file" hide />
                         <YAxis tick={{ fill: "#64748b", fontSize: 10 }} axisLine={false} tickLine={false} allowDecimals={false} />
-                        <Tooltip cursor={{ fill: '#1e293b' }} contentStyle={{ backgroundColor: '#020617', border: '1px solid #1e293b', borderRadius: '8px' }} />
+                        <Tooltip cursor={{ fill: '#27272a' }} contentStyle={{ backgroundColor: '#18181b', border: '1px solid #3f3f46', borderRadius: '6px' }} />
                         <Bar dataKey="value" radius={[4, 4, 4, 4]}>
                           {chartData.bar.map((_, i) => (
-                            <Cell key={i} fill={i === 0 ? "#f43f5e" : "#06b6d4"} />
+                            <Cell key={i} fill={i === 0 ? "#f43f5e" : "#2563eb"} />
                           ))}
                         </Bar>
                       </BarChart>
@@ -1568,7 +1577,7 @@ export default function Analysis() {
                 </div>
               </div>
 
-              <div className="p-6 rounded-2xl border border-slate-800 bg-[#0f172a]/50">
+              <div className="p-6 rounded-lg border border-zinc-800 bg-zinc-900/60">
                 <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest mb-4">Threat Classification</p>
                 <div className="h-28">
                   {chartData.pie.length > 0 ? (
@@ -1576,10 +1585,10 @@ export default function Analysis() {
                       <PieChart>
                         <Pie dataKey="value" data={chartData.pie} cx="50%" cy="50%" outerRadius={50} innerRadius={35} paddingAngle={5}>
                           {chartData.pie.map((entry, idx) => (
-                            <Cell key={idx} fill={["#06b6d4", "#3b82f6", "#10b981", "#f59e0b", "#f43f5e"][idx % 5]} />
+                            <Cell key={idx} fill={["#2563eb", "#3b82f6", "#10b981", "#f59e0b", "#f43f5e"][idx % 5]} />
                           ))}
                         </Pie>
-                        <Tooltip contentStyle={{ backgroundColor: '#020617', border: '1px solid #1e293b', borderRadius: '8px', fontSize: '12px' }} />
+                        <Tooltip contentStyle={{ backgroundColor: '#18181b', border: '1px solid #3f3f46', borderRadius: '6px', fontSize: '12px' }} />
                       </PieChart>
                     </ResponsiveContainer>
                   ) : <p className="text-sm text-slate-500">Insufficient data</p>}
@@ -1588,10 +1597,10 @@ export default function Analysis() {
             </div>
 
             {/* Data Table Area */}
-            <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+            <div className="grid grid-cols-1 gap-6">
               
-              {/* Left sidebar: File selector */}
-              <div className="lg:col-span-4 p-5 rounded-2xl border border-slate-800 bg-[#0f172a]/50 flex flex-col">
+              {/* File selector */}
+              <div className="p-5 rounded-lg border border-zinc-800 bg-zinc-900/60 flex flex-col">
                 <h3 className="text-sm font-bold text-slate-300 uppercase tracking-widest mb-4">Compromised Files</h3>
                 <div className="space-y-2 overflow-y-auto max-h-[450px] pr-2 scrollbar-thin scrollbar-thumb-slate-700">
                   {Object.entries(results!.vulnerabilities || {}).map(([file, secrets]) => {
@@ -1601,8 +1610,8 @@ export default function Analysis() {
                       <button
                         key={file}
                         onClick={() => setSelectedFile(file === selectedFile ? null : file)}
-                        className={`w-full text-left p-3 rounded-xl border transition-all ${
-                          active ? "border-cyan-500/50 bg-cyan-500/10 shadow-[0_0_15px_rgba(6,182,212,0.1)]" : "border-slate-800 bg-[#020617] hover:border-slate-600"
+                        className={`w-full text-left p-3 rounded-md border transition-all duration-200 active:scale-[0.99] ${
+                          active ? "border-blue-600/50 bg-blue-600/10 ring-1 ring-blue-600/20" : "border-zinc-800 bg-zinc-950 hover:border-zinc-600 hover:bg-zinc-900/80"
                         }`}
                       >
                         <div className="flex justify-between items-start gap-2">
@@ -1620,9 +1629,9 @@ export default function Analysis() {
                 </div>
               </div>
 
-              {/* Right area: Details Table */}
-              <div className="lg:col-span-8 p-0 rounded-2xl border border-slate-800 bg-[#0f172a]/50 overflow-hidden flex flex-col">
-                <div className="px-6 py-4 border-b border-slate-800 flex items-center justify-between bg-[#020617]/50">
+              {/* Details Table */}
+              <div className="p-0 rounded-lg border border-zinc-800 bg-zinc-900/60 overflow-hidden flex flex-col">
+                <div className="px-6 py-4 border-b border-zinc-800 flex items-center justify-between bg-zinc-950/50">
                   <h3 className="text-sm font-bold text-slate-300 uppercase tracking-widest">Secret Telemetry</h3>
                   <span className="text-xs text-slate-500">Showing page {page} of {totalPages}</span>
                 </div>
@@ -1630,7 +1639,7 @@ export default function Analysis() {
                 <div className="overflow-x-auto flex-1 p-2">
                   <table className="w-full text-left border-collapse">
                     <thead>
-                      <tr className="text-[10px] text-slate-500 uppercase tracking-wider border-b border-slate-800/50">
+                      <tr className="text-[10px] text-slate-500 uppercase tracking-wider border-b border-zinc-800/50">
                         <th className="px-4 py-3 font-semibold">File</th>
                         <th className="px-4 py-3 font-semibold">Exposed Secret</th>
                         <th className="px-4 py-3 font-semibold">Classification</th>
@@ -1640,7 +1649,7 @@ export default function Analysis() {
                         <th className="px-4 py-3 font-semibold text-right">Actions</th>
                       </tr>
                     </thead>
-                    <tbody className="divide-y divide-slate-800/50">
+                    <tbody className="divide-y divide-zinc-800/50">
                       {pagedRows.map((r, idx) => {
                         const rowKey = `p${page}-i${idx}`;
                         const expanded = openCodeRowKey === rowKey;
@@ -1653,7 +1662,7 @@ export default function Analysis() {
                             : null;
                         return (
                           <Fragment key={rowKey}>
-                            <tr className="hover:bg-slate-900/40 transition-colors">
+                            <tr className="hover:bg-zinc-800/35 transition-colors duration-150 border-b border-zinc-800/30">
                               <td className="px-4 py-4 max-w-[220px]" title={r.file}>
                                 <div className="min-w-0">
                                   <p className="text-sm font-semibold text-slate-100 truncate">{r.file.split('/').pop()}</p>
@@ -1669,7 +1678,7 @@ export default function Analysis() {
                               </td>
                               <td className="px-4 py-4">
                                 <div className="flex flex-col gap-2">
-                                  <span className="text-sm font-semibold text-cyan-300">{r.secret.type}</span>
+                                  <span className="text-sm font-semibold text-blue-300">{r.secret.type}</span>
                                   {r.secret.aiAnalysis?.is_secret && (
                                     <span className="inline-flex w-fit items-center px-2.5 py-1 rounded-full border border-emerald-500/20 bg-emerald-500/10 text-[10px] font-bold uppercase tracking-[0.18em] text-emerald-300">
                                       {aiServiceLabel ? `AI ${aiServiceLabel}` : "AI Verified"}
@@ -1686,7 +1695,7 @@ export default function Analysis() {
                                     </div>
                                     <div className="h-1.5 w-full rounded-full bg-slate-800 overflow-hidden">
                                       <div
-                                        className="h-full rounded-full bg-gradient-to-r from-cyan-400 to-emerald-400"
+                                        className="h-full rounded-full bg-gradient-to-r from-blue-400 to-emerald-400"
                                         style={{ width: `${confidencePercent}%` }}
                                       />
                                     </div>
@@ -1695,13 +1704,13 @@ export default function Analysis() {
                                     )}
                                   </div>
                                 ) : (
-                                  <span className="inline-flex items-center px-2.5 py-1 rounded-full border border-slate-800 bg-slate-950/70 text-[11px] text-slate-500">
+                                  <span className="inline-flex items-center px-2.5 py-1 rounded-full border border-zinc-800 bg-slate-950/70 text-[11px] text-slate-500">
                                     Not scored
                                   </span>
                                 )}
                               </td>
                               <td className="px-4 py-4">
-                                <span className="inline-flex items-center rounded-full border border-slate-800 bg-slate-950/70 px-2.5 py-1 text-[11px] font-semibold text-slate-300">#{r.secret.line}</span>
+                                <span className="inline-flex items-center rounded-full border border-zinc-800 bg-slate-950/70 px-2.5 py-1 text-[11px] font-semibold text-slate-300">#{r.secret.line}</span>
                               </td>
                               <td className="px-4 py-4">
                                 <button
@@ -1711,9 +1720,9 @@ export default function Analysis() {
                                   className={`px-3 py-2 rounded-xl text-[11px] font-semibold border transition-colors ${
                                     hasSnippet
                                       ? expanded
-                                        ? "border-cyan-500 bg-cyan-500/15 text-cyan-300"
-                                        : "border-slate-600 bg-slate-800/80 text-slate-200 hover:border-cyan-500/50"
-                                      : "border-slate-800 bg-slate-950/50 text-slate-600 cursor-not-allowed opacity-60"
+                                        ? "border-blue-500 bg-blue-500/15 text-blue-300"
+                                        : "border-slate-600 bg-slate-800/80 text-slate-200 hover:border-blue-500/50"
+                                      : "border-zinc-800 bg-slate-950/50 text-slate-600 cursor-not-allowed opacity-60"
                                   }`}
                                   title={hasSnippet ? "Toggle VS Code–style code context" : "No snippet returned — restart backend after update and rescan"}
                                 >
@@ -1726,14 +1735,14 @@ export default function Analysis() {
                                   type="button"
                                   onClick={() => handlePatchApply(r)}
                                   disabled={!canUsePatchAgent || patchBusyKey !== null}
-                                  className="px-3 py-2 rounded-xl border border-cyan-500/30 bg-cyan-500/10 hover:bg-cyan-500/20 text-[11px] font-semibold text-cyan-300 disabled:opacity-50"
+                                  className="px-3 py-2 rounded-xl border border-blue-500/30 bg-blue-500/10 hover:bg-blue-500/20 text-[11px] font-semibold text-blue-300 disabled:opacity-50"
                                 >
                                   {patchBusyKey === r.findingKey ? "Patching..." : "Patch"}
                                 </button>
-                                <button type="button" onClick={() => setRevealSecrets((p) => ({ ...p, [r.findingKey]: !p[r.findingKey] }))} className="px-3 py-2 rounded-xl border border-slate-700 hover:bg-slate-800 text-[11px] font-semibold text-slate-300">
+                                <button type="button" onClick={() => setRevealSecrets((p) => ({ ...p, [r.findingKey]: !p[r.findingKey] }))} className="px-3 py-2 rounded-xl border border-zinc-700 hover:bg-slate-800 text-[11px] font-semibold text-slate-300">
                                   {revealSecrets[r.findingKey] ? 'Hide' : 'Reveal'}
                                 </button>
-                                <button type="button" onClick={() => setSelectedFile(r.file)} className="px-3 py-2 rounded-xl bg-cyan-500/10 text-cyan-400 hover:bg-cyan-500/20 text-[11px] font-semibold">
+                                <button type="button" onClick={() => setSelectedFile(r.file)} className="px-3 py-2 rounded-xl bg-blue-500/10 text-blue-400 hover:bg-blue-500/20 text-[11px] font-semibold">
                                   Inspect
                                 </button>
                                 </div>
@@ -1742,9 +1751,9 @@ export default function Analysis() {
                             {expanded && (
                               <tr>
                                 <td colSpan={7} className="p-0 border-t-0">
-                                  <div className="px-4 py-4 bg-[#050810] border-t border-slate-800/80">
+                                  <div className="px-4 py-4 bg-zinc-950 border-t border-zinc-800/80">
                                     {r.secret.aiAnalysis && (
-                                      <div className="mb-4 rounded-2xl border border-emerald-500/15 bg-emerald-500/8 p-4">
+                                      <div className="mb-4 rounded-lg border border-emerald-500/15 bg-emerald-500/8 p-4">
                                         <div className="flex flex-wrap items-center justify-between gap-3">
                                           <div>
                                             <p className="text-[10px] uppercase tracking-[0.22em] text-emerald-300 font-bold">AI Verdict</p>
@@ -1756,10 +1765,10 @@ export default function Analysis() {
                                             </p>
                                           </div>
                                           <div className="flex flex-wrap gap-2">
-                                            <span className="px-2.5 py-1 rounded-full border border-slate-700 bg-slate-950/70 text-[10px] font-bold uppercase tracking-[0.18em] text-slate-200">
+                                            <span className="px-2.5 py-1 rounded-full border border-zinc-700 bg-slate-950/70 text-[10px] font-bold uppercase tracking-[0.18em] text-slate-200">
                                               Risk {Math.round((r.secret.aiAnalysis.risk_score ?? 0) * 100)}%
                                             </span>
-                                            <span className="px-2.5 py-1 rounded-full border border-slate-700 bg-slate-950/70 text-[10px] font-bold uppercase tracking-[0.18em] text-slate-200">
+                                            <span className="px-2.5 py-1 rounded-full border border-zinc-700 bg-slate-950/70 text-[10px] font-bold uppercase tracking-[0.18em] text-slate-200">
                                               Confidence {Math.round((r.secret.aiAnalysis.confidence ?? 0) * 100)}%
                                             </span>
                                           </div>
@@ -1788,7 +1797,7 @@ export default function Analysis() {
                   </table>
                 </div>
 
-                <div className="px-6 py-3 border-t border-slate-800 bg-[#020617]/50 flex justify-between items-center">
+                <div className="px-6 py-3 border-t border-zinc-800 bg-zinc-950/50 flex justify-between items-center">
                   <button onClick={() => setPage(p => Math.max(1, p - 1))} disabled={page === 1} className="px-3 py-1.5 rounded-lg text-xs font-semibold bg-slate-800 disabled:opacity-30 hover:bg-slate-700 text-white transition-all">Previous</button>
                   <button onClick={() => setPage(p => Math.min(totalPages, p + 1))} disabled={page === totalPages} className="px-3 py-1.5 rounded-lg text-xs font-semibold bg-slate-800 disabled:opacity-30 hover:bg-slate-700 text-white transition-all">Next Page</button>
                 </div>
@@ -1798,8 +1807,8 @@ export default function Analysis() {
         )}
 
         {/* Console Window */}
-        <div className="p-4 rounded-2xl border border-slate-800 bg-[#020617] mt-8 shadow-inner">
-          <div className="flex items-center justify-between mb-3 border-b border-slate-800 pb-2">
+        <div className="p-4 rounded-lg border border-zinc-800 bg-zinc-950 mt-8 shadow-inner">
+          <div className="flex items-center justify-between mb-3 border-b border-zinc-800 pb-2">
             <h4 className="text-[10px] font-bold text-slate-500 uppercase tracking-widest flex items-center gap-2">
               <span className="w-2 h-2 rounded-full bg-slate-500"></span> System Terminal
             </h4>
@@ -1810,16 +1819,52 @@ export default function Analysis() {
             ) : (
               consoleLines.map((line, i) => <div key={i} className={line.includes("Error") || line.includes("failed") ? "text-rose-400" : ""}>{line}</div>)
             )}
-            {loading && <div className="text-cyan-400 animate-pulse mt-2">&gt; Analyzing repository structures...</div>}
+            {loading && <div className="text-blue-400 animate-pulse mt-2">&gt; Analyzing repository structures...</div>}
           </div>
         </div>
       </main>
 
+      {diffModalOpen && diffLines.length > 0 && (
+        <div
+          className="fixed inset-0 z-[60] flex items-center justify-center bg-zinc-950/90 backdrop-blur-sm p-4"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="diff-modal-title"
+          onClick={() => setDiffModalOpen(false)}
+        >
+          <div
+            className="bg-zinc-900 border border-zinc-700 rounded-lg w-full max-w-5xl max-h-[90vh] flex flex-col shadow-xl ring-1 ring-zinc-800"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="px-5 py-4 border-b border-zinc-800 flex justify-between items-center gap-4 bg-zinc-950/80">
+              <div>
+                <h2 id="diff-modal-title" className="text-sm font-semibold text-zinc-100">
+                  Current remediation diff
+                </h2>
+                <p className="text-xs text-zinc-500 mt-1">
+                  {diffLines.length} lines · Press Esc or click outside to close
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setDiffModalOpen(false)}
+                className="px-3 py-1.5 rounded-md text-xs font-medium border border-zinc-600 text-zinc-300 hover:bg-zinc-800 transition-colors"
+              >
+                Close
+              </button>
+            </div>
+            <div className="flex-1 min-h-0 overflow-auto font-mono text-xs p-2 bg-zinc-950">
+              <UnifiedDiffLines lines={diffLines} />
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Inspect Modal Overlay */}
       {selectedFile && results && results.vulnerabilities && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-[#020617]/80 backdrop-blur-sm p-4">
-          <div className="bg-[#0f172a] border border-slate-700 rounded-2xl w-full max-w-4xl overflow-hidden shadow-2xl flex flex-col max-h-[85vh]">
-            <div className="px-6 py-4 border-b border-slate-800 flex justify-between items-center bg-[#020617]">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-zinc-950/80 backdrop-blur-sm p-4">
+          <div className="bg-zinc-900 border border-zinc-700 rounded-lg w-full max-w-4xl overflow-hidden shadow-xl shadow-black/40 ring-1 ring-zinc-800 flex flex-col max-h-[85vh]">
+            <div className="px-6 py-4 border-b border-zinc-800 flex justify-between items-center bg-zinc-950">
               <div>
                 <h3 className="text-sm font-bold text-white">File Inspection</h3>
                 <p className="text-[10px] text-slate-400 font-mono mt-1 break-all">{selectedFile}</p>
@@ -1829,22 +1874,22 @@ export default function Analysis() {
               </button>
             </div>
             
-            <div className="p-6 overflow-y-auto space-y-4 bg-[#0f172a]">
+            <div className="p-6 overflow-y-auto space-y-4 bg-zinc-900">
               {(results.vulnerabilities[selectedFile] || []).map((s, i) => {
                 const findingKey = `${selectedFile}#${i}`;
                 return (
-                <div key={findingKey} className="p-4 rounded-xl bg-[#020617] border border-slate-800">
+                <div key={findingKey} className="p-4 rounded-xl bg-zinc-950 border border-zinc-800">
                   <div className="flex justify-between items-start mb-4">
                     <div>
                       <span className="px-2 py-1 rounded bg-rose-500/10 text-rose-400 text-[10px] font-bold uppercase tracking-wider border border-rose-500/20">{s.type}</span>
-                      <p className="text-xs text-slate-400 mt-3 font-mono">Line: <span className="text-cyan-400">{s.line}</span> • Branch: {s.branch}</p>
+                      <p className="text-xs text-slate-400 mt-3 font-mono">Line: <span className="text-blue-400">{s.line}</span> • Branch: {s.branch}</p>
                     </div>
-                    <button onClick={() => setRevealSecrets((p) => ({ ...p, [findingKey]: !p[findingKey] }))} className="px-3 py-1.5 rounded-lg border border-slate-700 text-[10px] font-bold hover:bg-slate-800 text-white">
+                    <button onClick={() => setRevealSecrets((p) => ({ ...p, [findingKey]: !p[findingKey] }))} className="px-3 py-1.5 rounded-lg border border-zinc-700 text-[10px] font-bold hover:bg-slate-800 text-white">
                       {revealSecrets[findingKey] ? 'Mask Secret' : 'Reveal Secret'}
                     </button>
                   </div>
                   
-                  <div className="bg-black/50 p-3 rounded-lg border border-slate-800 font-mono text-xs overflow-x-auto text-rose-300">
+                  <div className="bg-black/50 p-3 rounded-lg border border-zinc-800 font-mono text-xs overflow-x-auto text-rose-300">
                     {revealSecrets[findingKey] ? s.secret : mask(s.secret)}
                   </div>
 
@@ -1857,15 +1902,15 @@ export default function Analysis() {
                             {Math.round((s.aiAnalysis.confidence ?? 0) * 100)}%
                           </p>
                         </div>
-                        <div className="rounded-xl border border-slate-800 bg-slate-950/70 p-3">
+                        <div className="rounded-xl border border-zinc-800 bg-slate-950/70 p-3">
                           <p className="text-[10px] uppercase tracking-[0.2em] text-slate-500 font-bold">Risk Score</p>
                           <p className="text-lg font-semibold text-amber-300 mt-2">
                             {Math.round((s.aiAnalysis.risk_score ?? 0) * 100)}%
                           </p>
                         </div>
-                        <div className="rounded-xl border border-slate-800 bg-slate-950/70 p-3">
+                        <div className="rounded-xl border border-zinc-800 bg-slate-950/70 p-3">
                           <p className="text-[10px] uppercase tracking-[0.2em] text-slate-500 font-bold">Analyzer Service</p>
-                          <p className="text-sm font-semibold text-cyan-300 mt-2">
+                          <p className="text-sm font-semibold text-blue-300 mt-2">
                             {s.aiAnalysis.service || "Unknown"}
                           </p>
                         </div>
@@ -1892,7 +1937,7 @@ export default function Analysis() {
                     </p>
                   )}
                   
-                  <div className="mt-4 pt-4 border-t border-slate-800 flex justify-between items-center text-[10px] text-slate-500">
+                  <div className="mt-4 pt-4 border-t border-zinc-800 flex justify-between items-center text-[10px] text-slate-500">
                     <p>Commit Context</p>
                     <p className="font-mono bg-slate-900 px-2 py-1 rounded">{s.commit && s.commit !== "N/A" ? s.commit.substring(0, 12) : "Unknown Commit"}</p>
                   </div>
@@ -1906,8 +1951,8 @@ export default function Analysis() {
 
       {/* Global Toast Notification */}
       {toastMessage && (
-        <div className="fixed bottom-6 right-6 z-50 bg-[#0f172a] border border-slate-700 shadow-2xl rounded-xl px-4 py-3 flex items-center gap-4 animate-in slide-in-from-bottom-5">
-          <div className="w-2 h-2 rounded-full bg-cyan-400 animate-pulse" />
+        <div className="fixed bottom-6 right-6 z-50 bg-zinc-900 border border-zinc-700 shadow-lg rounded-lg px-4 py-3 flex items-center gap-4 animate-in slide-in-from-bottom-5 ring-1 ring-zinc-800">
+          <div className="w-2 h-2 rounded-full bg-blue-400 animate-pulse" />
           <p className="text-xs font-semibold text-white">{toastMessage}</p>
           <button onClick={() => setToastMessage(null)} className="text-slate-500 hover:text-white ml-2">×</button>
         </div>

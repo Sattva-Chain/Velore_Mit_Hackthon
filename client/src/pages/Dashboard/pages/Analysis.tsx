@@ -1,6 +1,6 @@
-import React, { useEffect, useMemo } from "react";
+import React, { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
-import { userAuth } from "../../../context/Auth";
+import { userAuth, type Repository } from "../../../context/Auth";
 import {
   ShieldCheck,
   AlertTriangle,
@@ -11,8 +11,13 @@ import {
   Settings,
   FolderGit2,
   CheckCircle2,
-  Activity,
-  ShieldAlert
+  ShieldAlert,
+  ChartPie,
+  LineChart as LineChartIcon,
+  Link2,
+  RefreshCw,
+  Clock,
+  ExternalLink,
 } from "lucide-react";
 
 import {
@@ -25,216 +30,364 @@ import {
   Line,
   XAxis,
   YAxis,
-  CartesianGrid
+  CartesianGrid,
 } from "recharts";
 
-const ACCENT_COLOR = "#0ea5a4"; // Primary Cyan
+const ACCENT = "#2563eb";
+const ACCENT_MUTED = "#3f3f46";
 
-// Unified sleek card style matching the "SecureScan" dark UI exactly
-const CARD_STYLE = "bg-[#0B1120] border border-[#1E293B] rounded-xl p-6 flex flex-col shadow-lg";
+const CARD_BASE =
+  "bg-zinc-900/80 border border-zinc-800 rounded-lg p-5 flex flex-col shadow-sm transition-all duration-200 ease-out";
+const CARD = `${CARD_BASE} hover:border-zinc-700 hover:shadow-md hover:-translate-y-0.5`;
+
+type OrgMember = {
+  email?: string;
+  LastScanned?: string;
+  Status?: string;
+  userType?: string;
+  TotalRepositories?: number;
+  VerifiedRepositories?: number;
+  UnverifiedRepositories?: number;
+  _id?: string;
+};
+
+function buildScanBuckets7d(sources: (string | undefined | null)[]) {
+  const days: { date: string; scans: number }[] = [];
+  const now = new Date();
+  for (let i = 6; i >= 0; i--) {
+    const d = new Date(now);
+    d.setHours(0, 0, 0, 0);
+    d.setDate(d.getDate() - i);
+    const key = `${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+    days.push({ date: key, scans: 0 });
+  }
+  sources.forEach((raw) => {
+    if (!raw) return;
+    const d = new Date(raw);
+    if (Number.isNaN(d.getTime())) return;
+    const key = `${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+    const row = days.find((x) => x.date === key);
+    if (row) row.scans += 1;
+  });
+  return days;
+}
+
+function buildOrgScanActivity7d(employees: OrgMember[]) {
+  const dates: string[] = [];
+  employees.forEach((emp) => {
+    if (emp.LastScanned) dates.push(emp.LastScanned);
+  });
+  return buildScanBuckets7d(dates);
+}
+
+function DashboardSkeleton() {
+  return (
+    <div className="w-full flex flex-col gap-8 animate-pulse" aria-busy="true">
+      <div className="h-16 rounded-lg bg-zinc-800/80 border border-zinc-800" />
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+        {[1, 2, 3, 4].map((k) => (
+          <div key={k} className="h-28 rounded-lg bg-zinc-800/60 border border-zinc-800" />
+        ))}
+      </div>
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+        {[1, 2, 3].map((k) => (
+          <div key={k} className="h-72 rounded-lg bg-zinc-800/50 border border-zinc-800" />
+        ))}
+      </div>
+    </div>
+  );
+}
 
 const Analysis2 = () => {
-  const { user, company, refreshUser } = userAuth()!;
-  
-  useEffect(() => {
-    refreshUser();
-  }, []);
+  const { user, company, refreshUser, repo, authReady, token, sessionHydrated } = userAuth()!;
+  const [refreshing, setRefreshing] = useState(false);
 
-  // If neither present
-  if (!user && !company) {
+  /** Any logged-in staff user (not org-only session) uses the developer-style dashboard */
+  const isDeveloper = Boolean(user);
+  const isCompanyView = !!company && !user;
+  const employees = (company?.employees ?? []) as OrgMember[];
+  const ds = company?.dashboardStats;
+
+  const fallbackTotals = useMemo(() => {
+    let t = 0;
+    let v = 0;
+    let un = 0;
+    employees.forEach((emp) => {
+      t += Number(emp.TotalRepositories ?? 0);
+      v += Number(emp.VerifiedRepositories ?? 0);
+      un += Number(emp.UnverifiedRepositories ?? 0);
+    });
+    return { totalRepos: t, verifiedRepos: v, unverifiedRepos: un };
+  }, [employees]);
+
+  const totalRepos = ds?.totalRepositories ?? fallbackTotals.totalRepos;
+  const verifiedRepos = ds?.verifiedRepositories ?? fallbackTotals.verifiedRepos;
+  const unverifiedRepos = ds?.unverifiedRepositories ?? fallbackTotals.unverifiedRepos;
+
+  const devVerified = user?.VerifiedRepositories ?? 0;
+  const devTotal = user?.TotalRepositories ?? 0;
+
+  const lineData = useMemo(() => {
+    if (isCompanyView) {
+      return buildOrgScanActivity7d(employees);
+    }
+    const repoDates = (repo ?? []).map((r) => r.LastScanned);
+    if (user?.LastScanned) repoDates.push(user.LastScanned);
+    return buildScanBuckets7d(repoDates);
+  }, [isCompanyView, employees, repo, user?.LastScanned]);
+
+  const devPie = useMemo(
+    () => [
+      { name: "Verified", value: devVerified },
+      { name: "Unverified", value: Math.max(devTotal - devVerified, 0) },
+    ],
+    [devVerified, devTotal]
+  );
+
+  const orgPie = useMemo(
+    () => [
+      { name: "Verified", value: verifiedRepos },
+      { name: "Unverified", value: unverifiedRepos },
+    ],
+    [verifiedRepos, unverifiedRepos]
+  );
+
+  const pieSlices = isDeveloper ? devPie : orgPie;
+  const pieTotal = pieSlices.reduce((s, x) => s + x.value, 0);
+
+  const recentRepos = useMemo(() => {
+    const list = [...(repo ?? [])] as Repository[];
+    return list
+      .filter((r) => r.gitUrl)
+      .sort((a, b) => {
+        const ta = a.LastScanned ? new Date(a.LastScanned).getTime() : 0;
+        const tb = b.LastScanned ? new Date(b.LastScanned).getTime() : 0;
+        return tb - ta;
+      })
+      .slice(0, 6);
+  }, [repo]);
+
+  const orgActivityRows = useMemo(() => {
+    return [...employees]
+      .sort((a, b) => {
+        const ta = a.LastScanned ? new Date(a.LastScanned).getTime() : 0;
+        const tb = b.LastScanned ? new Date(b.LastScanned).getTime() : 0;
+        return tb - ta;
+      })
+      .slice(0, 8);
+  }, [employees]);
+
+  const handleRefresh = async () => {
+    setRefreshing(true);
+    try {
+      await refreshUser();
+    } finally {
+      setRefreshing(false);
+    }
+  };
+
+  if (!sessionHydrated) {
+    return <DashboardSkeleton />;
+  }
+
+  if (!token) {
     return (
-      <div className="w-full h-full flex items-center justify-center text-slate-300 p-8">
-        <div className="text-center bg-[#0B1120] border border-rose-500/20 p-8 rounded-2xl shadow-lg">
-          <AlertTriangle className="mx-auto text-rose-500 mb-4" size={48} />
-          <h2 className="text-2xl font-bold text-white mb-2">Access Denied</h2>
-          <p className="text-sm text-slate-400">Please log in with a developer or company account.</p>
+      <div className="w-full min-h-[50vh] flex items-center justify-center text-zinc-300 p-8">
+        <div className="text-center bg-zinc-900 border border-zinc-800 p-8 rounded-lg max-w-md">
+          <h2 className="text-lg font-semibold text-zinc-100 mb-2">Sign in required</h2>
+          <p className="text-sm text-zinc-500 mb-6">Your session is not available on this device.</p>
+          <Link
+            to="/"
+            className="inline-flex items-center gap-2 px-4 py-2 rounded-md bg-blue-600 hover:bg-blue-500 text-white text-sm font-medium"
+          >
+            Go to login
+          </Link>
         </div>
       </div>
     );
   }
 
-  const isDeveloper = !!user && user.userType === "developer";
-  const isCompanyView = !!company && !user;
+  if (!user && !company) {
+    if (!authReady) {
+      return <DashboardSkeleton />;
+    }
+    return (
+      <div className="w-full min-h-[50vh] flex items-center justify-center text-zinc-300 p-8">
+        <div className="text-center bg-zinc-900 border border-zinc-800 p-8 rounded-lg max-w-md">
+          <AlertTriangle className="mx-auto text-amber-500 mb-4" size={40} />
+          <h2 className="text-lg font-semibold text-zinc-100 mb-2">Session invalid</h2>
+          <p className="text-sm text-zinc-500 mb-6">We could not load your account. Try signing in again.</p>
+          <Link
+            to="/"
+            className="inline-flex items-center gap-2 px-4 py-2 rounded-md border border-zinc-600 text-zinc-200 hover:bg-zinc-800 text-sm"
+          >
+            Back to login
+          </Link>
+        </div>
+      </div>
+    );
+  }
 
-  // DEV stats
   const lastScan = user?.LastScanned ? new Date(user.LastScanned).toLocaleString() : null;
-  const devVerified = user?.VerifiedRepositories ?? 0;
-  const devTotal = user?.TotalRepositories ?? 1;
   const riskScore = Math.round((devVerified / Math.max(devTotal, 1)) * 100);
 
-  // Determine risk color based on score
   const getRiskColor = (score: number) => {
-    if (score >= 80) return "text-emerald-400";
-    if (score >= 50) return "text-amber-400";
-    return "text-rose-400";
+    if (score >= 80) return "text-emerald-500";
+    if (score >= 50) return "text-amber-500";
+    return "text-red-400";
   };
 
-  // COMPANY derived values (lightweight)
-  const employees = company?.employees ?? [];
-  const totalEmployees = company?.totalEmployees ?? employees.length;
-  const developersCount = company?.developersCount ?? employees.filter(e => e.userType === "developer").length;
-  const vulnerableCount = company?.vulnerableCount ?? employees.filter(e => e.Status === "Vulnerable").length;
-  const loggedInCount = company?.loggedInCount ?? employees.filter(e => !!e.LastScanned).length;
+  const totalEmployees = Number(company?.totalEmployees ?? employees.length) || employees.length;
+  const developersCount =
+    company?.developersCount ?? employees.filter((e) => e.userType === "developer").length;
+  const vulnerableCount =
+    company?.vulnerableCount ??
+    ds?.vulnerableAccounts ??
+    employees.filter((e) => e.Status === "Vulnerable").length;
+  const loggedInCount =
+    company?.loggedInCount ??
+    ds?.scannedMembersCount ??
+    employees.filter((e) => !!e.LastScanned).length;
 
-  // aggregate repos and small datasets for charts
-  const { totalRepos, verifiedRepos, unverifiedRepos, trendData } = useMemo(() => {
-    let t = 0, v = 0, un = 0;
-    const dateMap: Record<string, number> = {};
-    employees.forEach(emp => {
-      const te = Number(emp.TotalRepositories ?? 0);
-      const ve = Number(emp.VerifiedRepositories ?? 0);
-      const ue = Number(emp.UnverifiedRepositories ?? 0);
-      t += te; v += ve; un += ue;
-      if (emp.LastScanned) {
-        const key = new Date(emp.LastScanned).toISOString().slice(0,10);
-        dateMap[key] = (dateMap[key] || 0) + 1;
-      }
-    });
-    const trend = Object.keys(dateMap).sort().map(d => ({ date: d, scans: dateMap[d] }));
-    return { totalRepos: t, verifiedRepos: v, unverifiedRepos: un, trendData: trend };
-  }, [employees]);
+  const pageTitle = isCompanyView
+    ? company!.companyName?.trim() || "Organization"
+    : user!.name?.trim() || user!.email.split("@")[0];
 
-  // PIE dataset
-  const pieData = [
-    { name: "Verified", value: verifiedRepos },
-    { name: "Unverified", value: unverifiedRepos }
-  ];
-  const PIE_COLORS = [ACCENT_COLOR, "#151B28"]; // Cyan and Dark Panel background
+  const tooltipStyle = {
+    backgroundColor: "#18181b",
+    border: "1px solid #27272a",
+    borderRadius: "6px",
+    fontSize: "12px",
+  };
+
+  const statusBadge = (s?: string) => {
+    if (s === "Vulnerable")
+      return "bg-red-500/15 text-red-300 border-red-500/25";
+    if (s === "Safe") return "bg-emerald-500/15 text-emerald-300 border-emerald-500/25";
+    return "bg-zinc-800 text-zinc-400 border-zinc-700";
+  };
 
   return (
-    // Wrapper uses w-full h-full so it inherits the ultra-dark background from MainDashBoardLayout
-    <div className="w-full h-full flex flex-col gap-8 text-slate-200 font-sans">
-      
-      {/* --- Header --- */}
-      <header className="flex flex-col md:flex-row md:items-center justify-between gap-6 pb-2 border-b border-[#1E293B]">
+    <div className="w-full flex flex-col gap-8 text-zinc-200 pb-4">
+      <header className="flex flex-col md:flex-row md:items-center justify-between gap-4 pb-6 border-b border-zinc-800">
         <div>
-          <h1 className="text-2xl font-extrabold text-white tracking-wide flex items-center gap-3">
-            {isCompanyView ? company.companyName : user.email.split("@")[0]}
-          </h1>
-          <p className="text-sm text-slate-500 font-medium mt-1">
-            {isDeveloper ? "Developer overview & quick tools" : "Organization summary & security snapshot"}
+          <h1 className="text-xl font-semibold text-zinc-100 tracking-tight">{pageTitle}</h1>
+          <p className="text-sm text-zinc-500 mt-1">
+            {isDeveloper
+              ? "Live metrics from your account and stored repository scans."
+              : "Aggregated from your team’s user records and repository collection."}
           </p>
         </div>
 
-        <div className="flex items-center gap-4">
-          <Link 
-            to="/Dashboard2/settings" 
-            className="inline-flex items-center gap-2 px-5 py-2 rounded-lg border border-[#1E293B] bg-[#0B1120] text-slate-300 hover:bg-[#151B28] transition-all text-sm font-semibold"
+        <div className="flex items-center gap-2 flex-wrap">
+          <button
+            type="button"
+            onClick={handleRefresh}
+            disabled={refreshing}
+            className="inline-flex items-center gap-2 px-3 py-2 rounded-md border border-zinc-700 bg-zinc-900 text-zinc-300 hover:bg-zinc-800 text-sm font-medium transition-all active:scale-[0.98] disabled:opacity-50"
+          >
+            <RefreshCw size={16} className={refreshing ? "animate-spin" : ""} />
+            Refresh
+          </button>
+          <Link
+            to="/Dashboard2/settings"
+            className="inline-flex items-center gap-2 px-3 py-2 rounded-md border border-zinc-700 bg-zinc-900 text-zinc-300 hover:bg-zinc-800 text-sm font-medium transition-all active:scale-[0.98]"
           >
             <Settings size={16} />
             Settings
           </Link>
-          <Link 
-            to={isDeveloper ? "/Dashboard2/scans" : "/Dashboard2/reports"} 
-            className="inline-flex items-center gap-2 px-6 py-2 rounded-lg bg-cyan-400 hover:bg-cyan-300 text-slate-900 transition-colors text-sm font-bold shadow-lg shadow-cyan-500/10"
+          <Link
+            to={isDeveloper ? "/Dashboard2/scans" : "/Dashboard2/reports"}
+            className="inline-flex items-center gap-2 px-4 py-2 rounded-md bg-blue-600 hover:bg-blue-500 text-white text-sm font-medium transition-all shadow-sm shadow-blue-900/20 active:scale-[0.98]"
           >
-            {isDeveloper ? "Run Scan" : "View Full Report"}
-            <ChevronRight size={16} className="text-slate-800" />
+            {isDeveloper ? "Run scan" : "Full report"}
+            <ChevronRight size={16} />
           </Link>
         </div>
       </header>
 
-      {/* --- Quick Stat Cards --- */}
-      <section className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6 w-full">
+      <section
+        className={`grid grid-cols-1 sm:grid-cols-2 gap-4 w-full ${isDeveloper ? "lg:grid-cols-3" : "lg:grid-cols-4"}`}
+      >
         {isDeveloper ? (
           <>
-            {/* Dev: Risk Score */}
-            <div className={CARD_STYLE}>
-              <div className="flex justify-between items-start mb-4">
-                <p className="text-[11px] uppercase tracking-widest font-bold text-slate-500">Security Score</p>
-                <div className="bg-[#151B28] p-1.5 rounded-lg border border-[#1E293B]">
-                  <ShieldCheck size={18} className={getRiskColor(riskScore)} />
-                </div>
+            <div className={CARD}>
+              <div className="flex justify-between items-start mb-3">
+                <p className="text-xs font-medium text-zinc-500 uppercase tracking-wide">Security score</p>
+                <ShieldCheck size={18} className={getRiskColor(riskScore)} />
               </div>
-              <div className={`text-5xl font-black ${getRiskColor(riskScore)} mb-2`}>{riskScore}<span className="text-2xl text-slate-500">%</span></div>
-              <div className="text-xs text-slate-500 mt-auto">
-                Last scan: {lastScan ?? "Never"}
+              <div className={`text-4xl font-semibold tabular-nums ${getRiskColor(riskScore)}`}>
+                {riskScore}
+                <span className="text-lg text-zinc-500 font-normal">%</span>
               </div>
+              <p className="text-xs text-zinc-500 mt-3">Last activity: {lastScan ?? "None recorded"}</p>
             </div>
 
-            {/* Dev: Total Repos */}
-            <div className={CARD_STYLE}>
-              <div className="flex justify-between items-start mb-4">
-                <p className="text-[11px] uppercase tracking-widest font-bold text-slate-500">Total Repositories</p>
-                <div className="bg-[#151B28] p-1.5 rounded-lg border border-[#1E293B]">
-                  <FolderGit2 size={18} className="text-blue-400" />
-                </div>
+            <div className={CARD}>
+              <div className="flex justify-between items-start mb-3">
+                <p className="text-xs font-medium text-zinc-500 uppercase tracking-wide">Repositories</p>
+                <FolderGit2 size={18} className="text-zinc-400" />
               </div>
-              <div className="text-4xl font-bold text-white mb-2">{devTotal}</div>
+              <div className="text-3xl font-semibold text-zinc-100 tabular-nums">{devTotal}</div>
+              <p className="text-xs text-zinc-500 mt-3">Rows in your scan history</p>
             </div>
 
-            {/* Dev: Verified */}
-            <div className={CARD_STYLE}>
-              <div className="flex justify-between items-start mb-4">
-                <p className="text-[11px] uppercase tracking-widest font-bold text-slate-500">Verified Repos</p>
-                <div className="bg-[#151B28] p-1.5 rounded-lg border border-[#1E293B]">
-                  <CheckCircle2 size={18} className="text-emerald-400" />
-                </div>
+            <div className={CARD}>
+              <div className="flex justify-between items-start mb-3">
+                <p className="text-xs font-medium text-zinc-500 uppercase tracking-wide">Clean scans</p>
+                <CheckCircle2 size={18} className="text-emerald-500" />
               </div>
-              <div className="text-4xl font-bold text-white mb-2">{devVerified}</div>
+              <div className="text-3xl font-semibold text-zinc-100 tabular-nums">{devVerified}</div>
+              <p className="text-xs text-zinc-500 mt-3">Repositories marked Safe</p>
             </div>
           </>
         ) : (
           <>
-            {/* Company: Total Employees */}
-            <div className={CARD_STYLE}>
-              <div className="flex justify-between items-start mb-4">
-                <p className="text-[11px] uppercase tracking-widest font-bold text-slate-500">Total Employees</p>
-                <div className="bg-[#151B28] p-1.5 rounded-lg border border-[#1E293B]">
-                  <Users size={18} className="text-blue-400" />
-                </div>
+            <div className={CARD}>
+              <div className="flex justify-between items-start mb-3">
+                <p className="text-xs font-medium text-zinc-500 uppercase tracking-wide">Members</p>
+                <Users size={18} className="text-zinc-400" />
               </div>
-              <div className="text-4xl font-bold text-white mb-2">{totalEmployees}</div>
-              <div className="text-xs text-slate-500 mt-auto">
-                <span className="text-slate-300 font-medium">{developersCount}</span> active developers
-              </div>
+              <div className="text-3xl font-semibold text-zinc-100 tabular-nums">{totalEmployees}</div>
+              <p className="text-xs text-zinc-500 mt-3">
+                <span className="text-zinc-400">{developersCount}</span> developers
+              </p>
             </div>
 
-            {/* Company: Total Repos */}
-            <div className={CARD_STYLE}>
-              <div className="flex justify-between items-start mb-4">
-                <p className="text-[11px] uppercase tracking-widest font-bold text-slate-500">Total Repositories</p>
-                <div className="bg-[#151B28] p-1.5 rounded-lg border border-[#1E293B]">
-                  <FolderGit2 size={18} className="text-indigo-400" />
-                </div>
+            <div className={CARD}>
+              <div className="flex justify-between items-start mb-3">
+                <p className="text-xs font-medium text-zinc-500 uppercase tracking-wide">Repo records</p>
+                <FolderGit2 size={18} className="text-zinc-400" />
               </div>
-              <div className="text-4xl font-bold text-white mb-2">{totalRepos}</div>
-              <div className="text-xs text-slate-500 mt-auto">
-                Across <span className="text-slate-300 font-medium">{loggedInCount}</span> scanned users
-              </div>
+              <div className="text-3xl font-semibold text-zinc-100 tabular-nums">{totalRepos}</div>
+              <p className="text-xs text-zinc-500 mt-3">
+                <span className="text-zinc-400">{loggedInCount}</span> members with at least one scan
+              </p>
             </div>
 
-            {/* Company: Vulnerable Accounts */}
-            <div className={CARD_STYLE}>
-              <div className="flex justify-between items-start mb-4">
-                <p className="text-[11px] uppercase tracking-widest font-bold text-slate-500">Vulnerable Accounts</p>
-                <div className="bg-rose-500/10 p-1.5 rounded-lg border border-rose-500/20">
-                  <ShieldAlert size={18} className="text-rose-400" />
-                </div>
+            <div className={CARD}>
+              <div className="flex justify-between items-start mb-3">
+                <p className="text-xs font-medium text-zinc-500 uppercase tracking-wide">At risk</p>
+                <ShieldAlert size={18} className="text-red-400" />
               </div>
-              <div className="text-4xl font-bold text-rose-500 mb-2">{vulnerableCount}</div>
-              <div className="text-xs text-rose-500/70 mt-auto">
-                Immediate attention recommended
-              </div>
+              <div className="text-3xl font-semibold text-red-400 tabular-nums">{vulnerableCount}</div>
+              <p className="text-xs text-red-400/80 mt-3">Members with a vulnerable repo</p>
             </div>
 
-            {/* Company: Codebase Status */}
-            <div className={CARD_STYLE}>
-              <div className="flex justify-between items-start mb-4">
-                <p className="text-[11px] uppercase tracking-widest font-bold text-slate-500">Codebase Status</p>
-                <div className="bg-emerald-500/10 p-1.5 rounded-lg border border-emerald-500/20">
-                  <CheckCircle2 size={18} className="text-emerald-400" />
-                </div>
+            <div className={CARD}>
+              <div className="flex justify-between items-start mb-3">
+                <p className="text-xs font-medium text-zinc-500 uppercase tracking-wide">Verification</p>
+                <CheckCircle2 size={18} className="text-emerald-500" />
               </div>
-              <div className="flex gap-6 items-center mt-2">
+              <div className="flex gap-6 items-center mt-1">
                 <div>
-                  <div className="text-2xl font-bold text-emerald-400">{verifiedRepos}</div>
-                  <div className="text-[10px] text-slate-500 uppercase">Verified</div>
+                  <div className="text-2xl font-semibold text-emerald-500 tabular-nums">{verifiedRepos}</div>
+                  <div className="text-[11px] text-zinc-500 uppercase">Verified index</div>
                 </div>
-                <div className="w-px h-8 bg-[#1E293B]"></div>
+                <div className="w-px h-10 bg-zinc-800" />
                 <div>
-                  <div className="text-2xl font-bold text-slate-400">{unverifiedRepos}</div>
-                  <div className="text-[10px] text-slate-500 uppercase">Unverified</div>
+                  <div className="text-2xl font-semibold text-zinc-400 tabular-nums">{unverifiedRepos}</div>
+                  <div className="text-[11px] text-zinc-500 uppercase">Unverified index</div>
                 </div>
               </div>
             </div>
@@ -242,167 +395,170 @@ const Analysis2 = () => {
         )}
       </section>
 
-      {/* --- Charts & Actions Row --- */}
-      <section className="grid grid-cols-1 lg:grid-cols-3 gap-6 w-full">
-        
-        {/* Verification Pie Chart */}
-        <div className={`${CARD_STYLE} flex flex-col`}>
-          <h2 className="text-sm font-bold text-white tracking-wider mb-6 flex items-center gap-2">
-            📊 Verification Ratio
+      <section className="grid grid-cols-1 lg:grid-cols-3 gap-4 w-full">
+        <div className={`${CARD} min-h-[280px]`}>
+          <h2 className="text-sm font-medium text-zinc-200 mb-4 flex items-center gap-2">
+            <ChartPie size={16} className="text-zinc-500" />
+            Verification mix
           </h2>
-          <div className="flex-1 w-full min-h-[180px]">
-            <ResponsiveContainer width="100%" height="100%">
-              <PieChart>
-                <Pie
-                  data={isDeveloper ? [
-                    { name: "Verified", value: devVerified },
-                    { name: "Unverified", value: Math.max(devTotal - devVerified, 0) }
-                  ] : pieData}
-                  dataKey="value"
-                  nameKey="name"
-                  cx="50%"
-                  cy="50%"
-                  outerRadius={70}
-                  innerRadius={50}
-                  paddingAngle={5}
-                  stroke="none"
-                >
-                  {(isDeveloper ? [
-                    { name: "Verified", value: devVerified },
-                    { name: "Unverified", value: Math.max(devTotal - devVerified, 0) }
-                  ] : pieData).map((entry, idx) => (
-                    <Cell key={`cell-${idx}`} fill={PIE_COLORS[idx % PIE_COLORS.length]} />
-                  ))}
-                </Pie>
-                <ReTooltip 
-                  contentStyle={{ backgroundColor: '#0B1120', borderColor: '#1E293B', borderRadius: '8px', color: '#fff' }}
-                  itemStyle={{ color: '#fff' }}
-                />
-              </PieChart>
-            </ResponsiveContainer>
-          </div>
-          <div className="mt-4 flex justify-center gap-6 text-xs font-medium text-slate-400">
-            <div className="flex items-center gap-2">
-              <span className="w-3 h-3 rounded-full bg-cyan-400" /> Verified
-            </div>
-            <div className="flex items-center gap-2">
-              <span className="w-3 h-3 rounded-full bg-[#151B28] border border-[#1E293B]" /> Unverified
-            </div>
+          <div className="flex-1 w-full min-h-[200px] flex flex-col">
+            {pieTotal === 0 ? (
+              <div className="flex-1 flex flex-col items-center justify-center text-center px-4 py-8 rounded-md bg-zinc-950/50 border border-dashed border-zinc-800">
+                <p className="text-sm text-zinc-400">No repository data yet</p>
+                <p className="text-xs text-zinc-600 mt-2 max-w-[220px]">
+                  Data appears after developers run scans and results are saved to the API.
+                </p>
+              </div>
+            ) : (
+              <ResponsiveContainer width="100%" height={200}>
+                <PieChart>
+                  <Pie
+                    data={pieSlices}
+                    dataKey="value"
+                    nameKey="name"
+                    cx="50%"
+                    cy="50%"
+                    outerRadius={72}
+                    innerRadius={48}
+                    paddingAngle={2}
+                    stroke="none"
+                  >
+                    {pieSlices.map((_, idx) => (
+                      <Cell key={`cell-${idx}`} fill={idx === 0 ? ACCENT : ACCENT_MUTED} />
+                    ))}
+                  </Pie>
+                  <ReTooltip contentStyle={tooltipStyle} />
+                </PieChart>
+              </ResponsiveContainer>
+            )}
+            {pieTotal > 0 && (
+              <div className="mt-4 flex justify-center gap-6 text-xs text-zinc-500">
+                <span className="flex items-center gap-2">
+                  <span className="w-2.5 h-2.5 rounded-sm bg-blue-600" /> Verified
+                </span>
+                <span className="flex items-center gap-2">
+                  <span className="w-2.5 h-2.5 rounded-sm bg-zinc-600" /> Unverified
+                </span>
+              </div>
+            )}
           </div>
         </div>
 
-        {/* Scan Activity Line Chart */}
-        <div className={`${CARD_STYLE} flex flex-col`}>
-          <h2 className="text-sm font-bold text-white tracking-wider mb-6 flex items-center gap-2">
-            📈 Scan Activity (7 Days)
+        <div className={`${CARD} min-h-[280px]`}>
+          <h2 className="text-sm font-medium text-zinc-200 mb-4 flex items-center gap-2">
+            <LineChartIcon size={16} className="text-zinc-500" />
+            Scan activity (7 days)
           </h2>
-          <div className="flex-1 w-full min-h-[180px]">
-            <ResponsiveContainer width="100%" height="100%">
-              <LineChart data={(() => {
-                if (!isCompanyView) {
-                  return user && user.LastScanned ? [{ date: new Date(user.LastScanned).toISOString().slice(5,10), scans: 1 }] : [];
-                }
-                const counts: Record<string, number> = {};
-                employees.forEach(emp => {
-                  if (emp.LastScanned) {
-                    const d = new Date(emp.LastScanned).toISOString().slice(5,10); 
-                    counts[d] = (counts[d] || 0) + 1;
-                  }
-                });
-                return Object.keys(counts).sort().slice(-7).map(d => ({ date: d, scans: counts[d] }));
-              })()}>
-                <CartesianGrid stroke="#1E293B" strokeDasharray="3 3" vertical={false} />
-                <XAxis dataKey="date" tick={{ fill: "#64748b", fontSize: 11 }} axisLine={false} tickLine={false} dy={10} />
-                <YAxis tick={{ fill: "#64748b", fontSize: 11 }} axisLine={false} tickLine={false} dx={-10} />
-                <ReTooltip 
-                  contentStyle={{ backgroundColor: '#0B1120', borderColor: '#1E293B', borderRadius: '8px', color: '#fff' }}
+          <div className="flex-1 w-full min-h-[200px]">
+            <ResponsiveContainer width="100%" height={200}>
+              <LineChart data={lineData} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
+                <CartesianGrid stroke="#27272a" strokeDasharray="3 3" vertical={false} />
+                <XAxis
+                  dataKey="date"
+                  tick={{ fill: "#71717a", fontSize: 11 }}
+                  axisLine={false}
+                  tickLine={false}
+                  dy={8}
                 />
-                <Line 
-                  type="monotone" 
-                  dataKey="scans" 
-                  stroke={ACCENT_COLOR} 
-                  strokeWidth={3} 
-                  dot={{ r: 4, fill: '#0B1120', stroke: ACCENT_COLOR, strokeWidth: 2 }} 
-                  activeDot={{ r: 6, fill: ACCENT_COLOR }}
+                <YAxis
+                  allowDecimals={false}
+                  width={28}
+                  tick={{ fill: "#71717a", fontSize: 11 }}
+                  axisLine={false}
+                  tickLine={false}
+                />
+                <ReTooltip contentStyle={tooltipStyle} />
+                <Line
+                  type="monotone"
+                  dataKey="scans"
+                  stroke={ACCENT}
+                  strokeWidth={2}
+                  dot={{ r: 3, fill: "#18181b", stroke: ACCENT, strokeWidth: 2 }}
+                  activeDot={{ r: 5, fill: ACCENT }}
                 />
               </LineChart>
             </ResponsiveContainer>
           </div>
+          <p className="text-xs text-zinc-600 mt-2">
+            Each point counts how many repo scans finished that day (from stored timestamps).
+          </p>
         </div>
 
-        {/* Quick Links */}
-        <div className={CARD_STYLE}>
-          <h2 className="text-sm font-bold text-white tracking-wider mb-6 flex items-center gap-2">
-            🔗 Quick Links
+        <div className={CARD}>
+          <h2 className="text-sm font-medium text-zinc-200 mb-4 flex items-center gap-2">
+            <Link2 size={16} className="text-zinc-500" />
+            Shortcuts
           </h2>
-          <div className="flex flex-col gap-3">
+          <div className="flex flex-col gap-2">
             {isDeveloper ? (
               <>
-                <Link to="/Dashboard2/scans" className="group flex items-center justify-between p-3.5 rounded-lg bg-[#151B28] border border-[#1E293B] hover:border-cyan-500/30 hover:bg-cyan-950/20 transition-all">
-                  <div className="flex items-center gap-3">
-                    <div className="p-2 rounded-md bg-[#0B1120] border border-[#1E293B] group-hover:border-cyan-500/30 transition-colors">
-                      <GitBranch size={16} className="text-slate-400 group-hover:text-cyan-400" />
-                    </div>
-                    <div>
-                      <div className="text-sm font-bold text-slate-200 group-hover:text-cyan-400 transition-colors">Run New Scan</div>
-                      <div className="text-[11px] text-slate-500">Analyze your repositories</div>
+                <Link
+                  to="/Dashboard2/scans"
+                  className="group flex items-center justify-between p-3 rounded-md bg-zinc-950/50 border border-zinc-800 hover:border-blue-600/40 hover:bg-zinc-800/40 transition-all active:scale-[0.99]"
+                >
+                  <div className="flex items-center gap-3 min-w-0">
+                    <GitBranch size={16} className="text-zinc-500 shrink-0 group-hover:text-blue-400 transition-colors" />
+                    <div className="min-w-0">
+                      <div className="text-sm font-medium text-zinc-200">New scan</div>
+                      <div className="text-xs text-zinc-500 truncate">Remote or archive</div>
                     </div>
                   </div>
-                  <ChevronRight size={16} className="text-slate-600 group-hover:text-cyan-400 transition-transform group-hover:translate-x-1" />
+                  <ChevronRight size={16} className="text-zinc-600 group-hover:translate-x-0.5 transition-transform" />
                 </Link>
-
-                <Link to="/Dashboard2/reports" className="group flex items-center justify-between p-3.5 rounded-lg bg-[#151B28] border border-[#1E293B] hover:border-cyan-500/30 hover:bg-cyan-950/20 transition-all">
-                  <div className="flex items-center gap-3">
-                    <div className="p-2 rounded-md bg-[#0B1120] border border-[#1E293B] group-hover:border-cyan-500/30 transition-colors">
-                      <BarChart3 size={16} className="text-slate-400 group-hover:text-cyan-400" />
-                    </div>
-                    <div>
-                      <div className="text-sm font-bold text-slate-200 group-hover:text-cyan-400 transition-colors">View My Reports</div>
-                      <div className="text-[11px] text-slate-500">Detailed vulnerability data</div>
+                <Link
+                  to="/Dashboard2/reports"
+                  className="group flex items-center justify-between p-3 rounded-md bg-zinc-950/50 border border-zinc-800 hover:border-blue-600/40 hover:bg-zinc-800/40 transition-all active:scale-[0.99]"
+                >
+                  <div className="flex items-center gap-3 min-w-0">
+                    <BarChart3 size={16} className="text-zinc-500 shrink-0 group-hover:text-blue-400 transition-colors" />
+                    <div className="min-w-0">
+                      <div className="text-sm font-medium text-zinc-200">Reports</div>
+                      <div className="text-xs text-zinc-500 truncate">History and exports</div>
                     </div>
                   </div>
-                  <ChevronRight size={16} className="text-slate-600 group-hover:text-cyan-400 transition-transform group-hover:translate-x-1" />
+                  <ChevronRight size={16} className="text-zinc-600 group-hover:translate-x-0.5 transition-transform" />
                 </Link>
               </>
             ) : (
               <>
-                <Link to="/Dashboard2/manegEmploy" className="group flex items-center justify-between p-3.5 rounded-lg bg-[#151B28] border border-[#1E293B] hover:border-cyan-500/30 hover:bg-cyan-950/20 transition-all">
-                  <div className="flex items-center gap-3">
-                    <div className="p-2 rounded-md bg-[#0B1120] border border-[#1E293B] group-hover:border-cyan-500/30 transition-colors">
-                      <Users size={16} className="text-slate-400 group-hover:text-cyan-400" />
-                    </div>
-                    <div>
-                      <div className="text-sm font-bold text-slate-200 group-hover:text-cyan-400 transition-colors">Manage Team</div>
-                      <div className="text-[11px] text-slate-500">Add or remove employees</div>
+                <Link
+                  to="/Dashboard2/manegEmploy"
+                  className="group flex items-center justify-between p-3 rounded-md bg-zinc-950/50 border border-zinc-800 hover:border-blue-600/40 hover:bg-zinc-800/40 transition-all active:scale-[0.99]"
+                >
+                  <div className="flex items-center gap-3 min-w-0">
+                    <Users size={16} className="text-zinc-500 shrink-0 group-hover:text-blue-400 transition-colors" />
+                    <div className="min-w-0">
+                      <div className="text-sm font-medium text-zinc-200">Team</div>
+                      <div className="text-xs text-zinc-500 truncate">Members and access</div>
                     </div>
                   </div>
-                  <ChevronRight size={16} className="text-slate-600 group-hover:text-cyan-400 transition-transform group-hover:translate-x-1" />
+                  <ChevronRight size={16} className="text-zinc-600 group-hover:translate-x-0.5 transition-transform" />
                 </Link>
-
-                <Link to="/Dashboard2/reports" className="group flex items-center justify-between p-3.5 rounded-lg bg-[#151B28] border border-[#1E293B] hover:border-cyan-500/30 hover:bg-cyan-950/20 transition-all">
-                  <div className="flex items-center gap-3">
-                    <div className="p-2 rounded-md bg-[#0B1120] border border-[#1E293B] group-hover:border-cyan-500/30 transition-colors">
-                      <BarChart3 size={16} className="text-slate-400 group-hover:text-cyan-400" />
-                    </div>
-                    <div>
-                      <div className="text-sm font-bold text-slate-200 group-hover:text-cyan-400 transition-colors">Executive Report</div>
-                      <div className="text-[11px] text-slate-500">Exportable security summary</div>
+                <Link
+                  to="/Dashboard2/reports"
+                  className="group flex items-center justify-between p-3 rounded-md bg-zinc-950/50 border border-zinc-800 hover:border-blue-600/40 hover:bg-zinc-800/40 transition-all active:scale-[0.99]"
+                >
+                  <div className="flex items-center gap-3 min-w-0">
+                    <BarChart3 size={16} className="text-zinc-500 shrink-0 group-hover:text-blue-400 transition-colors" />
+                    <div className="min-w-0">
+                      <div className="text-sm font-medium text-zinc-200">Executive report</div>
+                      <div className="text-xs text-zinc-500 truncate">Organization summary</div>
                     </div>
                   </div>
-                  <ChevronRight size={16} className="text-slate-600 group-hover:text-cyan-400 transition-transform group-hover:translate-x-1" />
+                  <ChevronRight size={16} className="text-zinc-600 group-hover:translate-x-0.5 transition-transform" />
                 </Link>
-
-                <Link to="/Dashboard2/vulnerabilities" className="group flex items-center justify-between p-3.5 rounded-lg bg-[#151B28] border border-[#1E293B] hover:border-rose-500/30 hover:bg-rose-950/20 transition-all">
-                  <div className="flex items-center gap-3">
-                    <div className="p-2 rounded-md bg-[#0B1120] border border-[#1E293B] group-hover:border-rose-500/30 transition-colors">
-                      <ShieldAlert size={16} className="text-slate-400 group-hover:text-rose-400" />
-                    </div>
-                    <div>
-                      <div className="text-sm font-bold text-slate-200 group-hover:text-rose-400 transition-colors">Active Threats</div>
-                      <div className="text-[11px] text-slate-500">Review critical vulnerabilities</div>
+                <Link
+                  to="/Dashboard2/reports"
+                  className="group flex items-center justify-between p-3 rounded-md bg-zinc-950/50 border border-zinc-800 hover:border-red-900/50 hover:bg-red-950/20 transition-all active:scale-[0.99]"
+                >
+                  <div className="flex items-center gap-3 min-w-0">
+                    <ShieldAlert size={16} className="text-zinc-500 shrink-0 group-hover:text-red-400 transition-colors" />
+                    <div className="min-w-0">
+                      <div className="text-sm font-medium text-zinc-200 group-hover:text-red-200">Risk review</div>
+                      <div className="text-xs text-zinc-500 truncate">Drill into vulnerable accounts</div>
                     </div>
                   </div>
-                  <ChevronRight size={16} className="text-slate-600 group-hover:text-rose-400 transition-transform group-hover:translate-x-1" />
+                  <ChevronRight size={16} className="text-zinc-600 group-hover:translate-x-0.5 transition-transform" />
                 </Link>
               </>
             )}
@@ -410,6 +566,84 @@ const Analysis2 = () => {
         </div>
       </section>
 
+      {/* Live activity — real API data */}
+      <section className={`${CARD_BASE} border-zinc-800 p-0 overflow-hidden`}>
+        <div className="px-5 py-4 border-b border-zinc-800 flex items-center justify-between gap-3 bg-zinc-950/40">
+          <div className="flex items-center gap-2">
+            <Clock size={17} className="text-zinc-500" />
+            <h2 className="text-sm font-medium text-zinc-200">Recent activity</h2>
+          </div>
+          <span className="text-xs text-zinc-500">Updated when you press Refresh</span>
+        </div>
+        <div className="p-4 max-h-[320px] overflow-y-auto custom-scrollbar">
+          {isDeveloper ? (
+            recentRepos.length === 0 ? (
+              <p className="text-sm text-zinc-500 py-6 text-center">
+                No scanned repositories yet.{" "}
+                <Link to="/Dashboard2/scans" className="text-blue-400 hover:underline">
+                  Run a scan
+                </Link>{" "}
+                to populate this list.
+              </p>
+            ) : (
+              <ul className="space-y-2">
+                {recentRepos.map((r) => (
+                  <li
+                    key={r._id}
+                    className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 rounded-md border border-zinc-800/80 bg-zinc-950/40 px-4 py-3 hover:border-zinc-700 hover:bg-zinc-900/50 transition-all"
+                  >
+                    <div className="min-w-0 flex-1">
+                      <p className="text-sm text-zinc-200 truncate font-medium" title={r.gitUrl}>
+                        {r.gitUrl.replace(/^https?:\/\//, "").split("/").slice(0, 3).join("/")}
+                      </p>
+                      <p className="text-xs text-zinc-500 mt-1">
+                        {r.LastScanned
+                          ? `Last scan ${new Date(r.LastScanned).toLocaleString()}`
+                          : "No timestamp"}
+                        {" · "}
+                        <span className={r.Status === "Vulnerable" ? "text-red-400" : "text-zinc-400"}>
+                          {r.Status ?? "Unknown"}
+                        </span>
+                      </p>
+                    </div>
+                    <Link
+                      to="/Dashboard2/scans"
+                      className="inline-flex items-center gap-1 text-xs font-medium text-blue-400 hover:text-blue-300 shrink-0"
+                    >
+                      Open scans <ExternalLink className="w-3.5 h-3.5" />
+                    </Link>
+                  </li>
+                ))}
+              </ul>
+            )
+          ) : orgActivityRows.length === 0 ? (
+            <p className="text-sm text-zinc-500 py-6 text-center">No team members loaded.</p>
+          ) : (
+            <ul className="space-y-2">
+              {orgActivityRows.map((m) => (
+                <li
+                  key={m._id ?? m.email}
+                  className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 rounded-md border border-zinc-800/80 bg-zinc-950/40 px-4 py-3 hover:border-zinc-700 transition-all"
+                >
+                  <div className="min-w-0">
+                    <p className="text-sm text-zinc-200 font-medium truncate">{m.email ?? "Member"}</p>
+                    <p className="text-xs text-zinc-500 mt-1">
+                      {m.LastScanned
+                        ? `Last scan ${new Date(m.LastScanned).toLocaleString()}`
+                        : "No scans yet"}
+                    </p>
+                  </div>
+                  <span
+                    className={`text-[10px] font-semibold uppercase tracking-wide px-2.5 py-1 rounded-md border shrink-0 ${statusBadge(m.Status)}`}
+                  >
+                    {m.Status ?? "Pending"}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      </section>
     </div>
   );
 };
