@@ -1,0 +1,44 @@
+#!/bin/sh
+
+set -eu
+
+KEY_PATTERN='API_KEY|SECRET_KEY|PASSWORD|TOKEN'
+BLOCKED_MATCHES=""
+
+STAGED_FILES="$(git diff --cached --name-only --diff-filter=ACMR)"
+
+if [ -z "$STAGED_FILES" ]; then
+  exit 0
+fi
+
+while IFS= read -r FILE_PATH; do
+  [ -z "$FILE_PATH" ] && continue
+
+  case "$FILE_PATH" in
+    .githooks/pre-commit)
+      continue
+      ;;
+  esac
+
+  FILE_CONTENT="$(git show ":$FILE_PATH" 2>/dev/null || true)"
+  [ -z "$FILE_CONTENT" ] && continue
+
+  MATCH_LINES="$(printf '%s\n' "$FILE_CONTENT" | grep -nE "$KEY_PATTERN" || true)"
+  if [ -n "$MATCH_LINES" ]; then
+    BLOCKED_MATCHES="${BLOCKED_MATCHES}
+$FILE_PATH
+$MATCH_LINES"
+  fi
+done <<EOF
+$STAGED_FILES
+EOF
+
+if [ -n "$BLOCKED_MATCHES" ]; then
+  echo "ERROR: Secure pre-commit check failed." >&2
+  echo "Staged content contains blocked secret markers: API_KEY, SECRET_KEY, PASSWORD, or TOKEN." >&2
+  echo "Remove or rename them before committing." >&2
+  printf '%s\n' "$BLOCKED_MATCHES" >&2
+  exit 1
+fi
+
+exit 0
