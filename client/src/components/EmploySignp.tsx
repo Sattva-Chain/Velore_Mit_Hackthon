@@ -3,20 +3,22 @@ import React, { useState } from "react";
 import axios from "axios";
 import { Link, useNavigate } from "react-router-dom";
 import toast from "react-hot-toast";
+import { userAuth } from "../context/Auth";
 
 function EmployeeSignup() {
     const [email, setEmail] = useState("");
     const [password, setpassword] = useState("");
     const [message, setMessage] = useState("");
-    const nav = useNavigate()
+    const nav = useNavigate();
+    const { setToken } = userAuth()!;
     const handleSignup = async (e) => {
   e.preventDefault();
   try {
-    const { data } = await axios.post("http://localhost:3000/signup", { email, password });
+    const { data } = await axios.post("http://localhost:3000/api/signup", { email, password });
     if (data.success) {
       toast.success(data.message)
-      window.electronAPI.storeToken(data.tokenUser);
-      nav("/");
+      await setToken(data.tokenUser);
+      nav("/Dashboard2");
     } else {
         toast.error(data.message)
     }

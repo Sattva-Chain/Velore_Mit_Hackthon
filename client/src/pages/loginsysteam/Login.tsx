@@ -8,7 +8,7 @@ import { userAuth } from "../../context/Auth";
 const Login = () => {
   const [activeTab, setActiveTab] = useState("organization");
   const [loading, setLoading] = useState(false);
-  const { refreshUser } = userAuth()!;
+  const { setToken } = userAuth()!;
   const navigate = useNavigate();
 
   // State Objects
@@ -44,10 +44,7 @@ const Login = () => {
 
   // ✅ Token storage helper
   const finalizeLogin = async (tokens: string) => {
-    if (window.electronAPI) {
-      await window.electronAPI.storeToken(tokens);
-    }
-    await refreshUser();
+    await setToken(tokens);
     navigate("/Dashboard2");
   };
 

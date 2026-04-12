@@ -25,13 +25,6 @@ const {
   commitSession,
   rollbackSession,
 } = require("./services/remediation");
-const {
-  installGuard,
-  uninstallGuard,
-  getGuardStatus,
-  scanStagedChanges,
-  getHookScripts,
-} = require("./services/preCommitGuard");
 
 const execFileAsync = util.promisify(execFile);
 const app = express();
@@ -1349,91 +1342,6 @@ app.post("/patch/verify", async (req, res) => {
       success: true,
       remediation: await buildSessionMeta(session),
       results,
-    });
-  } catch (err) {
-    return res.status(500).json({ success: false, message: sanitizeErrorMessage(err.message) });
-  }
-});
-
-app.post("/guard/status", async (req, res) => {
-  try {
-    const session = getSession(req.body.sessionId);
-    if (!session) return res.status(404).json({ success: false, message: "Patch session not found or expired." });
-    if (session.sourceType !== "git") {
-      return res.json({ success: true, guard: { installed: false, supported: false } });
-    }
-    const guard = await getGuardStatus(session.repoPath);
-    return res.json({ success: true, guard: { ...guard, supported: true } });
-  } catch (err) {
-    return res.status(500).json({ success: false, message: sanitizeErrorMessage(err.message) });
-  }
-});
-
-app.post("/guard/install", async (req, res) => {
-  try {
-    const session = getSession(req.body.sessionId);
-    if (!session) return res.status(404).json({ success: false, message: "Patch session not found or expired." });
-    if (session.sourceType !== "git") {
-      return res.status(400).json({ success: false, message: "Pre-commit guard only works for Git repository scans." });
-    }
-    const guard = await installGuard(session.repoPath);
-    return res.json({ success: true, guard: { ...guard, supported: true } });
-  } catch (err) {
-    return res.status(500).json({ success: false, message: sanitizeErrorMessage(err.message) });
-  }
-});
-
-app.post("/guard/remove", async (req, res) => {
-  try {
-    const session = getSession(req.body.sessionId);
-    if (!session) return res.status(404).json({ success: false, message: "Patch session not found or expired." });
-    if (session.sourceType !== "git") {
-      return res.status(400).json({ success: false, message: "Pre-commit guard only works for Git repository scans." });
-    }
-    const guard = await uninstallGuard(session.repoPath);
-    return res.json({ success: true, guard: { ...guard, supported: true } });
-  } catch (err) {
-    return res.status(500).json({ success: false, message: sanitizeErrorMessage(err.message) });
-  }
-});
-
-app.post("/guard/check", async (req, res) => {
-  try {
-    const session = getSession(req.body.sessionId);
-    if (!session) return res.status(404).json({ success: false, message: "Patch session not found or expired." });
-    if (session.sourceType !== "git") {
-      return res.status(400).json({ success: false, message: "Pre-commit guard only works for Git repository scans." });
-    }
-    const guard = await getGuardStatus(session.repoPath);
-    const check = await scanStagedChanges(session.repoPath);
-    return res.json({
-      success: true,
-      guard: { ...guard, supported: true },
-      check: {
-        blocked: check.blocked,
-        stagedFilesCount: check.stagedFiles.length,
-        findingsCount: check.findings.length,
-        findings: check.findings,
-      },
-    });
-  } catch (err) {
-    return res.status(500).json({ success: false, message: sanitizeErrorMessage(err.message) });
-  }
-});
-
-app.post("/guard/script", async (req, res) => {
-  try {
-    const session = getSession(req.body.sessionId);
-    if (!session) return res.status(404).json({ success: false, message: "Patch session not found or expired." });
-    if (session.sourceType !== "git") {
-      return res.status(400).json({ success: false, message: "Pre-commit guard only works for Git repository scans." });
-    }
-    const guard = await getGuardStatus(session.repoPath);
-    const scripts = getHookScripts();
-    return res.json({
-      success: true,
-      guard: { ...guard, supported: true },
-      scripts,
     });
   } catch (err) {
     return res.status(500).json({ success: false, message: sanitizeErrorMessage(err.message) });

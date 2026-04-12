@@ -21,7 +21,7 @@ import EmployedLogs from './pages/Dashboard/pages/EmployedLogs'
 import Report from './pages/Dashboard/pages/Report'
 function App() {
 
-const {company,user} = userAuth()!
+const { company, user, token, sessionHydrated } = userAuth()!
   return (
     <>
 <Toaster
@@ -40,7 +40,17 @@ const {company,user} = userAuth()!
     <Routes>
       <Route
           path="/"
-          element={company || user ? <Navigate to="/Dashboard2" replace /> : <Login />}
+          element={
+            !sessionHydrated ? (
+              <div className="min-h-screen bg-zinc-950 flex items-center justify-center text-zinc-500 text-sm">
+                Loading session…
+              </div>
+            ) : company || user || token ? (
+              <Navigate to="/Dashboard2" replace />
+            ) : (
+              <Login />
+            )
+          }
         />
     
       <Route path='/login' element={<EmployeeLogin/>}/>
