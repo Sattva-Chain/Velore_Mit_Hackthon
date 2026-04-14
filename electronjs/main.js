@@ -75,7 +75,7 @@ ipcMain.handle("get-github-token", () => {
 });
 
 ipcMain.handle("clear-github-token", () => {
-  store.delete("githubToken");
+  store.delete("githubToken")
   return true;
 });
 
