@@ -27,6 +27,32 @@ function slugify(value) {
     .slice(0, 48);
 }
 
+function pushPendingInvites(memberList, invites = []) {
+  const activeEmails = new Set(
+    memberList
+      .map((member) => normalizeEmail(member.email))
+      .filter(Boolean)
+  );
+
+  (invites || [])
+    .filter((invite) => invite.status === "PENDING")
+    .forEach((invite) => {
+      const inviteEmail = normalizeEmail(invite.email);
+      if (!inviteEmail || activeEmails.has(inviteEmail)) {
+        return;
+      }
+
+      memberList.push({
+        _id: `invite:${invite._id}`,
+        name: null,
+        email: invite.email,
+        role: invite.role,
+        status: "INVITED",
+        invitedAt: invite.invitedAt || null,
+      });
+    });
+}
+
 async function hashPassword(password) {
   return bcrypt.hash(password, SALT_ROUNDS);
 }
@@ -37,6 +63,38 @@ async function verifyPassword(inputPassword, storedValue) {
     return bcrypt.compare(inputPassword, storedValue);
   }
   return String(inputPassword) === String(storedValue);
+}
+
+async function resolveOrganizationMembers(organization) {
+  const dbUsers = await User.find({ organizationId: organization._id })
+    .select("name email role isActive createdAt updatedAt")
+    .lean();
+
+  const sourceMembers =
+    dbUsers.length > 0
+      ? dbUsers
+      : (organization.members || []).map((member) => ({
+          _id: member._id,
+          name: member.name || null,
+          email: member.email,
+          role: member.role,
+          isActive: member.isActive,
+          createdAt: member.createdAt,
+          updatedAt: member.updatedAt,
+        }));
+
+  const memberList = sourceMembers.map((member) => ({
+    _id: member._id,
+    name: member.name || null,
+    email: member.email,
+    role: member.role,
+    status: member.isActive === false ? "INACTIVE" : "ACTIVE",
+    invitedAt: member.createdAt || null,
+  }));
+
+  const activeEmails = new Set(memberList.map((member) => normalizeEmail(member.email)).filter(Boolean));
+
+  return { memberList, activeEmails };
 }
 
 async function buildOrganizationSummary(organizationId, authUser) {
@@ -72,26 +130,11 @@ async function buildOrganizationSummary(organizationId, authUser) {
   ]);
 
   const summaryMap = Object.fromEntries(vulnerabilitySummary.map((row) => [row._id, row.count]));
-  const memberList = (organization.members || []).map((member) => ({
-    _id: member._id,
-    name: member.name || null,
-    email: member.email,
-    role: member.role,
-    status: member.isActive === false ? "INACTIVE" : "ACTIVE",
-    invitedAt: member.createdAt || null,
-  }));
-
-  const pendingInvites = (organization.invites || []).filter((invite) => invite.status === "PENDING");
-  pendingInvites.forEach((invite) => {
-    memberList.push({
-      _id: `invite:${invite._id}`,
-      name: null,
-      email: invite.email,
-      role: invite.role,
-      status: "INVITED",
-      invitedAt: invite.invitedAt || null,
-    });
-  });
+  const { memberList, activeEmails } = await resolveOrganizationMembers(organization);
+  pushPendingInvites(
+    memberList,
+    (organization.invites || []).filter((invite) => !activeEmails.has(normalizeEmail(invite.email)))
+  );
 
   return {
     _id: organization._id,
@@ -334,8 +377,15 @@ async function acceptInvite(req, res) {
     if (!memberIds.has(String(user._id))) {
       organization.members.push(user._id);
     }
-    invite.status = "ACCEPTED";
-    invite.acceptedAt = new Date();
+    const acceptedAt = new Date();
+    (organization.invites || []).forEach((entry) => {
+      if (normalizeEmail(entry.email) !== email) {
+        return;
+      }
+      entry.status = "ACCEPTED";
+      entry.acceptedAt = acceptedAt;
+    });
+    organization.markModified("invites");
     await organization.save();
 
     const tokenValue = createTokenForUser(user);
@@ -423,7 +473,14 @@ async function inviteEmployee(req, res) {
       to: email,
       organizationName: organization.name,
       inviteLink,
+      role,
     });
+
+    const message = delivery.delivered
+      ? "Invite sent successfully."
+      : delivery.skipped
+        ? "Invite created, but email delivery is not configured. Share the invite link manually or configure SMTP."
+        : "Invite created, but email delivery failed. Share the invite link manually and verify SMTP credentials.";
 
     return res.status(201).json({
       success: true,
@@ -434,9 +491,7 @@ async function inviteEmployee(req, res) {
         inviteLink,
       },
       delivery,
-      message: delivery.delivered
-        ? "Invite sent successfully."
-        : "Invite created, but email delivery was skipped or failed.",
+      message,
     });
   } catch (error) {
     console.error("Invite employee failed:", error);

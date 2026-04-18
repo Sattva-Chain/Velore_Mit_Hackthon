@@ -1,10 +1,14 @@
 // server.js
-require("dotenv").config();
+const path = require("path");
+const dotenv = require("dotenv");
+
+dotenv.config({ path: path.resolve(__dirname, ".env") });
+dotenv.config({ path: path.resolve(__dirname, "..", ".env"), override: false });
+
 const express = require("express");
 const multer = require("multer");
 const { execFile } = require("child_process");
 const AdmZip = require("adm-zip");
-const path = require("path");
 const fs = require("fs");
 const http = require("http");
 const https = require("https");
@@ -16,6 +20,7 @@ const authRouter = require("./routes/auth");
 const organizationRouter = require("./routes/organizations");
 const { default: user } = require("./models/user");
 const { default: comp } = require("./models/company");
+const repoModule = require("./models/repo");
 const { getGitBlameInfo, emptyBlameInfo } = require("./utils/gitBlame");
 const { resolveAuthUserFromHeader } = require("./middleware/auth");
 const { persistScanVulnerabilities } = require("./services/vulnerabilityPersistence");
@@ -31,10 +36,32 @@ const {
   commitSession,
   rollbackSession,
 } = require("./services/remediation");
+const Repository = repoModule.default || repoModule;
 
 const execFileAsync = util.promisify(execFile);
 const app = express();
 const PORT = 3000;
+
+async function ensureRepositoryIndexes() {
+  try {
+    const indexes = await Repository.collection.indexes();
+    const legacyGitUrlIndex = indexes.find(
+      (index) => index.name === "gitUrl_1" && index.unique
+    );
+
+    if (legacyGitUrlIndex) {
+      await Repository.collection.dropIndex("gitUrl_1");
+      console.log("ℹ️ Dropped legacy repositories.gitUrl unique index");
+    }
+
+    await Repository.collection.createIndex(
+      { userId: 1, gitUrl: 1 },
+      { unique: true, name: "userId_1_gitUrl_1" }
+    );
+  } catch (error) {
+    console.error("Failed to ensure repository indexes:", error.message);
+  }
+}
 
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
@@ -53,7 +80,10 @@ app.use(
 
 mongoose
   .connect("mongodb+srv://kr551344:o43CV2CxzEyrBKVj@cluster0.iabyjku.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0")
-  .then(() => console.log("✅ MongoDB Connected"))
+  .then(async () => {
+    console.log("✅ MongoDB Connected");
+    await ensureRepositoryIndexes();
+  })
   .catch((err) => console.error("❌ MongoDB Error:", err.message));
 
 app.use("/api", router);

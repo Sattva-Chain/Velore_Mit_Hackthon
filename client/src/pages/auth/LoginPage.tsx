@@ -115,22 +115,22 @@ export default function LoginPage() {
       title="Role-based access"
       subtitle="Sign in to personal, owner, or employee workspaces"
       footer={
-        <div className="text-sm text-slate-400">
+        <div className="text-sm text-zinc-400">
           New here?{" "}
-          <Link to="/register" className="text-blue-300 hover:text-blue-200">
+          <Link to="/register" className="text-blue-300 hover:text-blue-200 font-medium transition-colors">
             Create an account
           </Link>
         </div>
       }
     >
-      <div className="flex mb-6 border border-white/10 rounded-2xl overflow-hidden bg-white/5">
+      <div className="flex mb-6 border border-zinc-800 rounded-2xl overflow-hidden bg-zinc-950/70 p-1">
         {LOGIN_TABS.map((tab) => (
           <button
             key={tab.key}
             type="button"
             onClick={() => setRole(tab.key)}
-            className={`flex-1 py-2.5 text-xs md:text-sm font-medium transition ${
-              role === tab.key ? "bg-blue-500 text-white" : "text-gray-300 hover:bg-white/10"
+            className={`flex-1 rounded-xl py-2.5 text-xs md:text-sm font-semibold transition ${
+              role === tab.key ? "bg-blue-600 text-white shadow-sm" : "text-zinc-400 hover:bg-zinc-900 hover:text-zinc-200"
             }`}
           >
             {tab.label}
@@ -138,30 +138,30 @@ export default function LoginPage() {
         ))}
       </div>
 
-      <form className="space-y-4" onSubmit={handleSubmit}>
+      <form className="grid grid-cols-1 md:grid-cols-2 gap-4" onSubmit={handleSubmit}>
         <div>
-          <label className="text-xs uppercase tracking-[0.2em] text-slate-500 font-bold">Email</label>
+          <label className="text-xs uppercase tracking-[0.2em] text-zinc-500 font-bold">Email</label>
           <input
             type="email"
             value={email}
             onChange={(event) => setEmail(event.target.value)}
             placeholder="you@company.com"
-            className="w-full mt-2 p-3 bg-white/10 border border-white/10 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 transition"
+            className="w-full mt-2 p-3.5 bg-zinc-800/80 border border-zinc-700 rounded-xl text-zinc-100 placeholder:text-zinc-500 focus:outline-none focus:ring-2 focus:ring-blue-500/60 focus:border-blue-500/40 transition"
           />
         </div>
 
         <div>
-          <label className="text-xs uppercase tracking-[0.2em] text-slate-500 font-bold">Password</label>
+          <label className="text-xs uppercase tracking-[0.2em] text-zinc-500 font-bold">Password</label>
           <input
             type="password"
             value={password}
             onChange={(event) => setPassword(event.target.value)}
             placeholder="Enter your password"
-            className="w-full mt-2 p-3 bg-white/10 border border-white/10 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 transition"
+            className="w-full mt-2 p-3.5 bg-zinc-800/80 border border-zinc-700 rounded-xl text-zinc-100 placeholder:text-zinc-500 focus:outline-none focus:ring-2 focus:ring-blue-500/60 focus:border-blue-500/40 transition"
           />
         </div>
 
-        <div className="rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-xs text-slate-400 leading-6">
+        <div className="md:col-span-2 rounded-xl border border-zinc-800 bg-zinc-950/70 px-4 py-3 text-sm text-zinc-400 leading-6">
           {role === "SOLO_DEVELOPER"
             ? "Use your own account to view only your repository scans and vulnerabilities."
             : role === "ORG_OWNER"
@@ -172,7 +172,7 @@ export default function LoginPage() {
         <button
           disabled={loading}
           type="submit"
-          className="px-6 py-3 bg-blue-500 hover:bg-blue-600 disabled:bg-blue-800 text-white rounded-lg w-full font-semibold transition"
+          className="md:col-span-2 w-full rounded-xl bg-blue-600 px-6 py-3.5 text-white font-semibold hover:bg-blue-500 disabled:bg-blue-800 transition shadow-[0_10px_30px_rgba(37,99,235,0.25)]"
         >
           {buttonLabel}
         </button>

@@ -93,6 +93,7 @@ export type ScanResults = {
     mode?: string;
     sourceKind?: string;
     repoUrl?: string | null;
+    branch?: string | null;
     analyzer?: {
       url?: string;
       reviewedCount?: number;
@@ -615,11 +616,15 @@ export default function Analysis() {
 
     const totalSecrets = data?.summary?.secretsFound ?? 0;
     const status = data?.error ? "Error" : totalSecrets > 0 ? "Vulnerable" : "Clean";
+    const resolvedBranch =
+      data?.scanMeta?.verification?.branch ||
+      data?.scanMeta?.branch ||
+      "main";
 
     const body = {
       userId: user._id,
-      gitUrl: [gitUrl],
-      Branch: "main",
+      gitUrl,
+      Branch: resolvedBranch,
       LastScanned: new Date().toISOString(),
       Status: status,
       VerifiedRepositories: status === "Clean" ? 1 : 0,
@@ -630,14 +635,15 @@ export default function Analysis() {
 
     try {
       logToConsole("→ Syncing telemetry with security database...");
-      const { data: res } = await axios.post("http://localhost:3000/api/numberkeys", body);
+      const { data: res } = await axiosInstance.post("/api/numberkeys", body);
       logToConsole("✅ Telemetry sync complete.");
       if (res?.user) {
         setUser(res.user);
-        refreshUser();
+        await refreshUser();
       }
     } catch (err: any) {
-      logToConsole("❌ Telemetry sync failed: " + (err.message || err));
+      const message = err?.response?.data?.message || err?.response?.data?.error || err.message || err;
+      logToConsole("❌ Telemetry sync failed: " + message);
     }
   };
 

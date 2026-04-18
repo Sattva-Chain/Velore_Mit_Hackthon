@@ -1,5 +1,5 @@
 "use client";
-import React, { useState, useEffect, useRef } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Pie, Bar } from "react-chartjs-2";
 import {
   Chart as ChartJS,
@@ -10,44 +10,274 @@ import {
   LinearScale,
   BarElement,
 } from "chart.js";
-import { FiDatabase, FiCheckCircle, FiAlertTriangle, FiKey, FiExternalLink } from "react-icons/fi";
+import {
+  AlertTriangle,
+  BarChart3,
+  CheckCircle2,
+  ExternalLink,
+  FileWarning,
+  FolderGit2,
+  ShieldCheck,
+  X,
+} from "lucide-react";
 import { userAuth } from "../../../context/Auth";
 
 ChartJS.register(ArcElement, Tooltip, Legend, CategoryScale, LinearScale, BarElement);
 
-const CARD_STYLE = "p-8 rounded-xl bg-[#111827] border border-[#1E293B] shadow-2xl";
+const CARD = "rounded-lg border border-zinc-800 bg-zinc-900/70 p-5";
+const PANEL = "rounded-lg border border-zinc-800 bg-zinc-900/70 overflow-hidden";
 
-const Report = () => {
-  const { user, repo, company } = userAuth() || {};
-  const [selectedRepo, setSelectedRepo] = useState<any | null>(null);
-  const [repoSecrets, setRepoSecrets] = useState<any[]>([]);
+type RepoSecret = {
+  type?: string;
+  file?: string;
+  line?: number | string;
+  author?: string | null;
+  email?: string | null;
+  authorEmail?: string | null;
+  commitTime?: string | null;
+};
+
+type RepoRecord = {
+  _id?: string;
+  gitUrl: string;
+  Branch?: string;
+  Status?: string;
+  LastScanned?: string;
+  createdAt?: string;
+  updatedAt?: string;
+  TotalSecrets?: number;
+  VerifiedRepositories?: number;
+  UnverifiedRepositories?: number;
+  vulnerabilities?: Record<string, RepoSecret[]>;
+};
+
+export default function Report() {
+  const { user, repo, company, role, organization } = userAuth() || {};
+  const [selectedRepo, setSelectedRepo] = useState<RepoRecord | null>(null);
+  const [repoSecrets, setRepoSecrets] = useState<RepoSecret[]>([]);
   const modalRef = useRef<HTMLDivElement | null>(null);
 
-  // Close modal on Escape
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && setSelectedRepo(null);
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setSelectedRepo(null);
+    };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
-  // Close modal on outside click
   useEffect(() => {
-    const onClick = (e: MouseEvent) => {
+    const onClick = (event: MouseEvent) => {
       if (!selectedRepo) return;
-      if (modalRef.current && !modalRef.current.contains(e.target as Node)) setSelectedRepo(null);
+      if (modalRef.current && !modalRef.current.contains(event.target as Node)) {
+        setSelectedRepo(null);
+      }
     };
     document.addEventListener("mousedown", onClick);
     return () => document.removeEventListener("mousedown", onClick);
   }, [selectedRepo]);
 
+  const developerRepos = (repo || []) as RepoRecord[];
+  const totalRepos = user?.TotalRepositories ?? developerRepos.length ?? 0;
+  const verifiedRepos = user?.VerifiedRepositories ?? 0;
+  const unverifiedRepos = user?.UnverifiedRepositories ?? 0;
+
+  const openRepoDetails = (record: RepoRecord) => {
+    setSelectedRepo(record);
+    if (record.vulnerabilities) {
+      setRepoSecrets(Object.entries(record.vulnerabilities).flatMap(([file, findings]) => findings.map((finding) => ({ ...finding, file }))));
+    } else {
+      setRepoSecrets([]);
+    }
+  };
+
+  const formatDate = (value: unknown) => {
+    if (!value) return "N/A";
+    const date = new Date(String(value));
+    return Number.isNaN(date.getTime()) ? String(value) : date.toLocaleString();
+  };
+
+  const commonOptions = useMemo(
+    () => ({
+      color: "#94a3b8",
+      plugins: {
+        legend: { labels: { color: "#e5e7eb" } },
+      },
+    }),
+    []
+  );
+
+  const barOptions = useMemo(
+    () => ({
+      ...commonOptions,
+      scales: {
+        x: { ticks: { color: "#94a3b8" }, grid: { color: "#27272a" } },
+        y: { ticks: { color: "#94a3b8" }, grid: { color: "#27272a" } },
+      },
+    }),
+    [commonOptions]
+  );
+
+  const verificationPieData = useMemo(
+    () => ({
+      labels: ["Verified", "Unverified"],
+      datasets: [
+        {
+          data: [verifiedRepos, unverifiedRepos],
+          backgroundColor: ["#2563eb", "#f97316"],
+          borderColor: "#18181b",
+          borderWidth: 2,
+        },
+      ],
+    }),
+    [verifiedRepos, unverifiedRepos]
+  );
+
+  const verificationBarData = useMemo(
+    () => ({
+      labels: ["Repositories"],
+      datasets: [
+        {
+          label: "Verified",
+          data: [verifiedRepos],
+          backgroundColor: "#2563eb",
+          borderRadius: 6,
+        },
+        {
+          label: "Unverified",
+          data: [unverifiedRepos],
+          backgroundColor: "#f97316",
+          borderRadius: 6,
+        },
+      ],
+    }),
+    [verifiedRepos, unverifiedRepos]
+  );
+
+  const secretTypes = Array.from(new Set(repoSecrets.map((secret) => secret.type).filter(Boolean)));
+  const secretFiles = Array.from(new Set(repoSecrets.map((secret) => secret.file).filter(Boolean)));
+
+  const secretsPieData = useMemo(
+    () => ({
+      labels: secretTypes,
+      datasets: [
+        {
+          data: secretTypes.map((type) => repoSecrets.filter((secret) => secret.type === type).length),
+          backgroundColor: ["#2563eb", "#0ea5e9", "#f97316", "#ef4444", "#10b981"],
+          borderColor: "#18181b",
+          borderWidth: 2,
+        },
+      ],
+    }),
+    [repoSecrets, secretTypes]
+  );
+
+  const secretsBarData = useMemo(
+    () => ({
+      labels: secretFiles,
+      datasets: [
+        {
+          label: "Secrets",
+          data: secretFiles.map((file) => repoSecrets.filter((secret) => secret.file === file).length),
+          backgroundColor: "#2563eb",
+          borderRadius: 6,
+        },
+      ],
+    }),
+    [repoSecrets, secretFiles]
+  );
+
+  const statCards = [
+    {
+      label: "Tracked repositories",
+      value: totalRepos,
+      icon: FolderGit2,
+      tone: "text-blue-300",
+    },
+    {
+      label: "Verified",
+      value: verifiedRepos,
+      icon: ShieldCheck,
+      tone: "text-emerald-300",
+    },
+    {
+      label: "Needs attention",
+      value: unverifiedRepos,
+      icon: AlertTriangle,
+      tone: "text-orange-300",
+    },
+  ];
+
+  const selectedRepoTotalSecrets = selectedRepo?.TotalSecrets ?? repoSecrets.length;
+  const selectedRepoAffectedFiles = repoSecrets.length
+    ? new Set(repoSecrets.map((secret) => secret.file).filter(Boolean)).size
+    : selectedRepoTotalSecrets > 0
+      ? 1
+      : 0;
+
+  if (role === "EMPLOYEE") {
+    return (
+      <div className="w-full flex flex-col gap-8 text-zinc-200 pb-4">
+        <header className="flex flex-col md:flex-row md:items-center justify-between gap-4 pb-6 border-b border-zinc-800">
+          <div>
+            <h1 className="text-xl font-semibold text-zinc-100 tracking-tight">Security Reports</h1>
+            <p className="text-sm text-zinc-500 mt-1">
+              Detailed repository reports are restricted for employees. Use vulnerabilities for your assigned visibility.
+            </p>
+          </div>
+        </header>
+
+        <div className={`${CARD} min-h-[260px] flex flex-col items-center justify-center text-center`}>
+          <AlertTriangle className="w-10 h-10 text-blue-400 mb-4" />
+          <h2 className="text-lg font-semibold text-zinc-100">Employee report access limited</h2>
+          <p className="text-sm text-zinc-500 mt-3 max-w-lg leading-6">
+            Repository-wide drill-downs are available to owners through team management and to solo developers in their own workspace.
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  if ((role === "ORG_OWNER" || (organization && role !== "SOLO_DEVELOPER")) && user) {
+    return (
+      <div className="w-full flex flex-col gap-8 text-zinc-200 pb-4">
+        <header className="flex flex-col md:flex-row md:items-center justify-between gap-4 pb-6 border-b border-zinc-800">
+          <div>
+            <h1 className="text-xl font-semibold text-zinc-100 tracking-tight">Security Reports</h1>
+            <p className="text-sm text-zinc-500 mt-1">
+              Owner repository drill-downs now live inside team management so you can inspect each employee separately.
+            </p>
+          </div>
+        </header>
+
+        <div className={`${CARD} min-h-[300px] flex flex-col items-center justify-center text-center`}>
+          <BarChart3 className="w-10 h-10 text-blue-400 mb-4" />
+          <h2 className="text-lg font-semibold text-zinc-100">Use Team Management for employee repos</h2>
+          <p className="text-sm text-zinc-500 mt-3 max-w-lg leading-6">
+            Open the team page and use the employee `View repos` action to inspect what each member has scanned and how many exposed keys are open.
+          </p>
+        </div>
+      </div>
+    );
+  }
+
   if (company && !user) {
     return (
-      <div className="flex justify-center items-center h-screen bg-[#0B1120] text-center p-6 text-[#0ae8f0] font-semibold text-xl">
-        <div className="bg-[#111827] border border-[#1E293B] p-10 rounded-xl shadow-2xl">
-          <span className="text-4xl mb-4 block">👔</span>
-          Organization Account Detected
-          <p className="text-gray-400 mt-2 text-sm font-normal">
-            Security reports are only available for developer accounts.
+      <div className="w-full flex flex-col gap-8 text-zinc-200 pb-4">
+        <header className="flex flex-col md:flex-row md:items-center justify-between gap-4 pb-6 border-b border-zinc-800">
+          <div>
+            <h1 className="text-xl font-semibold text-zinc-100 tracking-tight">Security Reports</h1>
+            <p className="text-sm text-zinc-500 mt-1">
+              Developer reports are available on individual workspaces. Organization-wide risk lives in vulnerability management.
+            </p>
+          </div>
+        </header>
+
+        <div className={`${CARD} min-h-[300px] flex flex-col items-center justify-center text-center`}>
+          <BarChart3 className="w-10 h-10 text-blue-400 mb-4" />
+          <h2 className="text-lg font-semibold text-zinc-100">Organization session detected</h2>
+          <p className="text-sm text-zinc-500 mt-3 max-w-lg leading-6">
+            This page stays focused on personal repository reports. For organization owners, the richer cross-team view is now available under
+            the vulnerability dashboard.
           </p>
         </div>
       </div>
@@ -56,319 +286,276 @@ const Report = () => {
 
   if (!user) {
     return (
-      <div className="flex justify-center items-center h-screen bg-[#0B1120] text-center p-6">
-        <div className="bg-[#111827] border border-red-900/50 p-10 rounded-xl text-lg font-medium text-red-500 shadow-2xl">
-          ⚠ No User Logged In!
-        </div>
+      <div className={`${CARD} min-h-[320px] flex flex-col items-center justify-center text-center`}>
+        <AlertTriangle className="w-10 h-10 text-orange-300 mb-4" />
+        <h2 className="text-lg font-semibold text-zinc-100">No active developer session</h2>
+        <p className="text-sm text-zinc-500 mt-3">Sign in as a developer to view repository-level reports.</p>
       </div>
     );
   }
 
-  const handleRepoClick = (r: any) => {
-    setSelectedRepo(r);
-    if (r.vulnerabilities) {
-      const secretsFlat = Object.values(r.vulnerabilities).flat();
-      setRepoSecrets(secretsFlat);
-    } else {
-      setRepoSecrets([]);
-    }
-  };
-
-  const formatDate = (d: any) => {
-    if (!d) return "N/A";
-    const date = new Date(d);
-    return isNaN(date.getTime()) ? String(d) : date.toLocaleString();
-  };
-
-  // --- Chart Configurations for Dark Mode ---
-  const commonOptions = {
-    color: '#9ca3af',
-    plugins: { legend: { labels: { color: '#e5e7eb' } } }
-  };
-
-  const barOptions = {
-    ...commonOptions,
-    scales: {
-      x: { ticks: { color: '#9ca3af' }, grid: { color: '#1E293B' } },
-      y: { ticks: { color: '#9ca3af' }, grid: { color: '#1E293B' } }
-    }
-  };
-
-  // --- Chart Data ---
-  const pieData = {
-    labels: ["Verified", "Unverified"],
-    datasets: [
-      {
-        data: [user.VerifiedRepositories ?? 0, user.UnverifiedRepositories ?? 0],
-        backgroundColor: ["#10b981", "#ef4444"],
-        borderColor: "#111827",
-        borderWidth: 2,
-      },
-    ],
-  };
-
-  const barData = {
-    labels: ["Repositories"],
-    datasets: [
-      { label: "Verified", data: [user.VerifiedRepositories ?? 0], backgroundColor: "#10b981", borderRadius: 4 },
-      { label: "Unverified", data: [user.UnverifiedRepositories ?? 0], backgroundColor: "#ef4444", borderRadius: 4 },
-    ],
-  };
-
-  const secretsPieData = {
-    labels: Array.from(new Set(repoSecrets.map((s) => s.type))),
-    datasets: [
-      {
-        data: Array.from(new Set(repoSecrets.map((s) => s.type))).map(
-          (type) => repoSecrets.filter((s) => s.type === type).length
-        ),
-        backgroundColor: ["#0ae8f0", "#3b82f6", "#ef4444", "#eab308", "#10b981"],
-        borderColor: "#111827",
-        borderWidth: 2,
-      },
-    ],
-  };
-
-  const secretsBarData = {
-    labels: Array.from(new Set(repoSecrets.map((s) => s.file))),
-    datasets: [
-      {
-        label: "Secrets Count",
-        data: Array.from(new Set(repoSecrets.map((s) => s.file))).map(
-          (file) => repoSecrets.filter((s) => s.file === file).length
-        ),
-        backgroundColor: "#0ae8f0",
-        borderRadius: 4,
-      },
-    ],
-  };
-
   return (
-    <div className="min-h-screen text-gray-200 p-8 bg-[#0B1120]">
-      <style>{`
-        @keyframes fadeInScale { from { opacity: 0; transform: translateY(-6px) scale(.98);} to { opacity: 1; transform: translateY(0) scale(1);} }
-        .animate-fadeInScale { animation: fadeInScale 160ms ease-out; }
-      `}</style>
+    <div className="w-full flex flex-col gap-8 text-zinc-200 pb-4">
+      <header className="flex flex-col md:flex-row md:items-center justify-between gap-4 pb-6 border-b border-zinc-800">
+        <div>
+          <h1 className="text-xl font-semibold text-zinc-100 tracking-tight">Security Reports</h1>
+          <p className="text-sm text-zinc-500 mt-1">
+            Repository verification metrics and drill-down details for your saved scan history.
+          </p>
+        </div>
+        <div className="text-sm text-zinc-500">{user.email}</div>
+      </header>
 
-      <div className="max-w-7xl mx-auto space-y-8">
-        
-        {/* Header */}
-        <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 pb-4 border-b border-[#1E293B]">
+      <section className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+        {statCards.map((card) => {
+          const Icon = card.icon;
+          return (
+            <div key={card.label} className={CARD}>
+              <div className="flex justify-between items-start mb-3">
+                <p className="text-xs font-medium text-zinc-500 uppercase tracking-wide">{card.label}</p>
+                <Icon className={`w-4 h-4 ${card.tone}`} />
+              </div>
+              <div className={`text-3xl font-semibold tabular-nums ${card.tone}`}>{card.value ?? 0}</div>
+            </div>
+          );
+        })}
+      </section>
+
+      <section className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+        <div className={CARD}>
+          <h2 className="text-sm font-medium text-zinc-200 mb-5">Verification mix</h2>
+          <div className="h-72 flex justify-center items-center">
+            <Pie data={verificationPieData} options={commonOptions} />
+          </div>
+        </div>
+        <div className={CARD}>
+          <h2 className="text-sm font-medium text-zinc-200 mb-5">Verification volume</h2>
+          <div className="h-72">
+            <Bar data={verificationBarData} options={barOptions} />
+          </div>
+        </div>
+      </section>
+
+      <section className={PANEL}>
+        <div className="px-5 py-4 border-b border-zinc-800 flex items-center justify-between gap-3 bg-zinc-950/40">
           <div>
-            <h2 className="text-3xl font-bold text-white tracking-wide">
-              Security Report <span className="text-[#0ae8f0]">🔍</span>
-            </h2>
-            <p className="text-gray-400 text-sm mt-1 font-mono">{user.email?.split("@")[0]}</p>
+            <h2 className="text-sm font-semibold text-zinc-100">Tracked repositories</h2>
+            <p className="text-xs text-zinc-500 mt-1">Open a repository to inspect the stored secrets summary and metadata.</p>
           </div>
+          <span className="px-2.5 py-1 rounded-full border border-zinc-700 text-[10px] font-bold uppercase tracking-[0.18em] text-zinc-300">
+            {developerRepos.length} repos
+          </span>
         </div>
 
-        {/* Stats Cards */}
-        <div className="grid gap-6 grid-cols-1 sm:grid-cols-3">
-          {[
-            { title: "Total Repositories", val: user.TotalRepositories, color: "text-[#0ae8f0]", icon: <FiDatabase size={24} /> },
-            { title: "Verified", val: user.VerifiedRepositories, color: "text-green-500", icon: <FiCheckCircle size={24} /> },
-            { title: "Unverified", val: user.UnverifiedRepositories, color: "text-red-500", icon: <FiAlertTriangle size={24} /> },
-          ].map((item, i) => (
-            <div key={i} className={`${CARD_STYLE} flex items-center gap-5`}>
-              <div className={`p-4 rounded-lg bg-[#0B1120] border border-[#1E293B] ${item.color}`}>
-                {item.icon}
-              </div>
-              <div>
-                <p className="text-xs text-gray-500 font-bold uppercase tracking-wider">{item.title}</p>
-                <p className={`text-4xl font-bold mt-1 ${item.color}`}>{item.val ?? 0}</p>
-              </div>
-            </div>
-          ))}
-        </div>
-
-        {/* Charts */}
-        <div className="grid sm:grid-cols-2 gap-6">
-          <div className={CARD_STYLE}>
-            <h3 className="font-bold text-sm text-white mb-6 uppercase tracking-wider flex items-center gap-2">
-              <span className="w-2 h-4 bg-blue-500 rounded-sm block"></span>
-              Verification Status
-            </h3>
-            <div className="h-64 flex justify-center">
-              <Pie data={pieData} options={commonOptions} />
-            </div>
-          </div>
-          <div className={CARD_STYLE}>
-            <h3 className="font-bold text-sm text-white mb-6 uppercase tracking-wider flex items-center gap-2">
-              <span className="w-2 h-4 bg-green-500 rounded-sm block"></span>
-              Verified vs Unverified
-            </h3>
-            <div className="h-64">
-              <Bar data={barData} options={barOptions} />
-            </div>
-          </div>
-        </div>
-
-        {/* Repo List */}
-        <div className={CARD_STYLE}>
-          <div className="flex items-center justify-between mb-6 pb-4 border-b border-[#1E293B]">
-            <h3 className="font-bold text-lg text-white flex items-center gap-2">
-              <span className="w-2 h-6 bg-yellow-500 rounded-sm block"></span>
-              Tracked Git Repositories
-            </h3>
-            <div className="text-xs font-bold text-gray-500 bg-[#0B1120] px-3 py-1 rounded-md border border-[#1E293B]">
-              TOTAL: {repo?.length ?? 0}
-            </div>
-          </div>
-
-          {repo?.length ? (
-            <div className="space-y-3">
-              {repo.map((r, index) => (
-                <div key={r._id || index} className="p-5 bg-[#0B1120] rounded-lg border border-[#1E293B] hover:border-[#0ae8f0]/50 transition-colors group">
-                  <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
-                    <div className="flex-1 min-w-0">
-                      <a href={r.gitUrl} target="_blank" rel="noreferrer" className="text-[#0ae8f0] hover:text-white font-mono text-sm break-all transition-colors inline-flex items-center gap-2">
-                        {r.gitUrl} <FiExternalLink size={12} />
+        {developerRepos.length ? (
+          <div className="divide-y divide-zinc-800">
+            {developerRepos.map((record, index) => {
+              const risk = record.Status === "Vulnerable";
+              return (
+                <div key={record._id || index} className="px-5 py-5 hover:bg-zinc-800/20 transition-colors">
+                  <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+                    <div className="min-w-0 flex-1">
+                      <a
+                        href={record.gitUrl}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="inline-flex items-center gap-2 text-blue-300 hover:text-blue-200 text-sm font-medium break-all"
+                      >
+                        {record.gitUrl}
+                        <ExternalLink className="w-3.5 h-3.5 shrink-0" />
                       </a>
-                      <div className="text-xs text-gray-500 mt-2 font-mono uppercase">
-                        Branch: <span className="text-gray-300">{r.Branch ?? "N/A"}</span>
+                    <div className="flex flex-wrap gap-x-5 gap-y-2 mt-3 text-xs text-zinc-500">
+                        <span>Branch: <span className="text-zinc-300">{record.Branch || "N/A"}</span></span>
+                        <span>Last scanned: <span className="text-zinc-300">{formatDate(record.LastScanned)}</span></span>
+                        <span>Open keys: <span className="text-orange-300 font-medium">{record.TotalSecrets ?? 0}</span></span>
                       </div>
                     </div>
-                    <div className="flex items-center gap-4 w-full md:w-auto justify-between md:justify-end">
-                      <span className={`px-3 py-1 rounded border text-xs font-bold tracking-wider uppercase ${r.Status === "Vulnerable" ? "text-red-400 bg-red-500/10 border-red-500/20" : "text-green-400 bg-green-500/10 border-green-500/20"}`}>
-                        {r.Status ?? "Unknown"}
-                      </span>
-                      <button 
-                        onClick={() => handleRepoClick(r)} 
-                        className="px-4 py-2 rounded-lg bg-[#0ae8f0]/10 text-[#0ae8f0] border border-[#0ae8f0]/30 hover:bg-[#0ae8f0] hover:text-[#0B1120] text-sm font-semibold transition-all duration-300 flex items-center gap-2"
+
+                    <div className="flex items-center gap-3">
+                      <span
+                        className={`px-3 py-1 rounded-full border text-[11px] font-semibold uppercase tracking-[0.18em] ${
+                          risk
+                            ? "border-orange-500/20 bg-orange-500/10 text-orange-300"
+                            : "border-emerald-500/20 bg-emerald-500/10 text-emerald-300"
+                        }`}
                       >
-                        <FiKey size={14} /> Details
+                        {record.Status || "Unknown"}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => openRepoDetails(record)}
+                        className="inline-flex items-center gap-2 px-4 py-2 rounded-md bg-blue-600 hover:bg-blue-500 text-white text-sm font-medium transition-colors"
+                      >
+                        <FileWarning className="w-4 h-4" />
+                        View details
                       </button>
                     </div>
                   </div>
                 </div>
-              ))}
-            </div>
-          ) : (
-            <p className="text-gray-500 py-8 text-center text-sm italic">No repositories found in the database.</p>
-          )}
-        </div>
-      </div>
+              );
+            })}
+          </div>
+        ) : (
+          <div className="px-5 py-12 text-center text-sm text-zinc-500">No repositories have been saved for this developer yet.</div>
+        )}
+      </section>
 
-      {/* Modal */}
       {selectedRepo && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-          <div className="absolute inset-0 bg-black/80 backdrop-blur-sm transition-opacity" />
+          <div className="absolute inset-0 bg-black/80 backdrop-blur-sm" />
           <div
             ref={modalRef}
-            className="relative w-full max-w-3xl max-h-[90vh] overflow-y-auto bg-[#111827] border border-[#1E293B] p-8 rounded-xl shadow-2xl animate-fadeInScale scrollbar-thin scrollbar-thumb-gray-700 scrollbar-track-transparent"
+            className="relative w-full max-w-5xl max-h-[90vh] overflow-y-auto rounded-xl border border-zinc-800 bg-zinc-900 shadow-2xl"
           >
-            {/* Header */}
-            <div className="flex justify-between items-start gap-4 mb-6 pb-6 border-b border-[#1E293B]">
+            <div className="px-6 py-5 border-b border-zinc-800 flex items-start justify-between gap-4 bg-zinc-950/40">
               <div>
-                <h3 className="text-2xl font-bold text-white mb-2 flex items-center gap-3">
-                  <span className="w-2 h-6 bg-[#0ae8f0] rounded-sm block"></span>
-                  Repository Analysis
-                </h3>
-                <p className="text-sm font-mono text-[#0ae8f0] break-all">{selectedRepo.gitUrl}</p>
+                <h2 className="text-lg font-semibold text-zinc-100">Repository Analysis</h2>
+                <p className="text-sm text-blue-300 mt-2 break-all">{selectedRepo.gitUrl}</p>
               </div>
-              <button 
-                onClick={() => setSelectedRepo(null)} 
-                className="text-gray-500 hover:text-white p-2 bg-[#0B1120] rounded-lg border border-[#1E293B] transition-colors"
-              >
-                ✕
-              </button>
-            </div>
-
-            {/* Repo Metadata */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-6 mb-8">
-              <div className="space-y-3 text-sm">
-                <div className="flex justify-between border-b border-[#1E293B]/50 pb-2">
-                  <span className="text-gray-500 uppercase text-xs tracking-wider">Status</span> 
-                  <span className={`font-bold ${selectedRepo.Status === "Vulnerable" ? "text-red-400" : "text-green-400"}`}>{selectedRepo.Status ?? "N/A"}</span>
-                </div>
-                <div className="flex justify-between border-b border-[#1E293B]/50 pb-2">
-                  <span className="text-gray-500 uppercase text-xs tracking-wider">Branch</span> 
-                  <span className="text-white font-mono">{selectedRepo.Branch ?? "N/A"}</span>
-                </div>
-                <div className="flex justify-between border-b border-[#1E293B]/50 pb-2">
-                  <span className="text-gray-500 uppercase text-xs tracking-wider">Verified</span> 
-                  <span className="text-white">{selectedRepo.VerifiedRepositories ?? 0}</span>
-                </div>
-                <div className="flex justify-between pb-2">
-                  <span className="text-gray-500 uppercase text-xs tracking-wider">Unverified</span> 
-                  <span className="text-white">{selectedRepo.UnverifiedRepositories ?? 0}</span>
-                </div>
-              </div>
-              <div className="space-y-3 text-sm">
-                <div className="flex justify-between border-b border-[#1E293B]/50 pb-2">
-                  <span className="text-gray-500 uppercase text-xs tracking-wider">Last Scanned</span> 
-                  <span className="text-white text-right">{formatDate(selectedRepo.LastScanned)}</span>
-                </div>
-                <div className="flex justify-between border-b border-[#1E293B]/50 pb-2">
-                  <span className="text-gray-500 uppercase text-xs tracking-wider">Added On</span> 
-                  <span className="text-white text-right">{formatDate(selectedRepo.createdAt)}</span>
-                </div>
-                <div className="flex justify-between pb-2">
-                  <span className="text-gray-500 uppercase text-xs tracking-wider">Updated</span> 
-                  <span className="text-white text-right">{formatDate(selectedRepo.updatedAt)}</span>
-                </div>
-              </div>
-            </div>
-
-            {/* Total Secrets Alert */}
-            <div className={`mb-8 p-5 rounded-lg border flex justify-between items-center ${repoSecrets.length > 0 ? "bg-red-500/10 border-red-500/30" : "bg-green-500/10 border-green-500/30"}`}>
-              <div className="flex items-center gap-3">
-                {repoSecrets.length > 0 ? <FiAlertTriangle className="text-red-400" size={24}/> : <FiCheckCircle className="text-green-400" size={24} />}
-                <span className={`text-lg font-bold ${repoSecrets.length > 0 ? "text-red-400" : "text-green-400"}`}>
-                  Exposed Secrets / Tokens Detected
-                </span>
-              </div>
-              <span className={`text-3xl font-black ${repoSecrets.length > 0 ? "text-red-500" : "text-green-500"}`}>
-                {selectedRepo.TotalSecrets ?? repoSecrets.length}
-              </span>
-            </div>
-
-            {/* Secrets Badges & Charts */}
-            {repoSecrets.length > 0 && (
-              <>
-                <div className="mb-6">
-                  <h4 className="text-xs text-gray-500 font-bold uppercase tracking-wider mb-3">Detected Types</h4>
-                  <div className="flex flex-wrap gap-2">
-                    {repoSecrets.map((s, idx) => (
-                      <span key={idx} className="flex items-center gap-1 px-3 py-1.5 text-xs font-mono rounded-md bg-[#0B1120] border border-[#1E293B] text-gray-300">
-                        <FiKey className="text-[#0ae8f0]" size={12} /> {s.type}
-                      </span>
-                    ))}
-                  </div>
-                </div>
-                <div className="grid sm:grid-cols-2 gap-6 bg-[#0B1120] p-6 rounded-xl border border-[#1E293B]">
-                  <div>
-                    <h5 className="text-xs font-bold uppercase tracking-wider text-gray-500 mb-4">Distribution by Type</h5>
-                    <Pie data={secretsPieData} options={commonOptions} />
-                  </div>
-                  <div>
-                    <h5 className="text-xs font-bold uppercase tracking-wider text-gray-500 mb-4">Distribution by File</h5>
-                    <Bar data={secretsBarData} options={barOptions} />
-                  </div>
-                </div>
-              </>
-            )}
-
-            {/* Modal Actions */}
-            <div className="flex justify-end gap-4 mt-8 pt-6 border-t border-[#1E293B]">
-              <button 
-                className="px-5 py-2.5 rounded-lg bg-[#1E293B] hover:bg-[#2A374A] text-white text-sm font-semibold transition-colors" 
+              <button
+                type="button"
                 onClick={() => setSelectedRepo(null)}
+                className="p-2 rounded-md border border-zinc-800 bg-zinc-950 text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800"
               >
-                Close Panel
+                <X className="w-4 h-4" />
               </button>
-              <button 
-                className="px-5 py-2.5 rounded-lg bg-[#0ae8f0] text-[#0B1120] hover:bg-white text-sm font-bold transition-colors flex items-center gap-2" 
-                onClick={() => window.open(selectedRepo.gitUrl, "_blank")}
-              >
-                Open in GitHub <FiExternalLink />
-              </button>
+            </div>
+
+            <div className="p-6 space-y-6">
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                <div className={CARD}>
+                  <h3 className="text-sm font-medium text-zinc-200 mb-4">Repository metadata</h3>
+                  <div className="space-y-3 text-sm">
+                    <div className="flex justify-between gap-4">
+                      <span className="text-zinc-500">Status</span>
+                      <span className={selectedRepo.Status === "Vulnerable" ? "text-orange-300" : "text-emerald-300"}>
+                        {selectedRepo.Status || "N/A"}
+                      </span>
+                    </div>
+                    <div className="flex justify-between gap-4">
+                      <span className="text-zinc-500">Branch</span>
+                      <span className="text-zinc-200">{selectedRepo.Branch || "N/A"}</span>
+                    </div>
+                    <div className="flex justify-between gap-4">
+                      <span className="text-zinc-500">Last scanned</span>
+                      <span className="text-zinc-200">{formatDate(selectedRepo.LastScanned)}</span>
+                    </div>
+                    <div className="flex justify-between gap-4">
+                      <span className="text-zinc-500">Created</span>
+                      <span className="text-zinc-200">{formatDate(selectedRepo.createdAt)}</span>
+                    </div>
+                    <div className="flex justify-between gap-4">
+                      <span className="text-zinc-500">Updated</span>
+                      <span className="text-zinc-200">{formatDate(selectedRepo.updatedAt)}</span>
+                    </div>
+                  </div>
+                </div>
+
+                <div className={CARD}>
+                  <h3 className="text-sm font-medium text-zinc-200 mb-4">Secret summary</h3>
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                    <div className="rounded-lg border border-orange-500/20 bg-orange-500/10 px-4 py-4">
+                      <p className="text-[11px] uppercase tracking-[0.18em] text-orange-200/80 font-bold">Open exposed keys</p>
+                      <p className="text-3xl font-semibold text-orange-300 mt-3">{selectedRepoTotalSecrets}</p>
+                    </div>
+                    <div className="rounded-lg border border-zinc-800 bg-zinc-950/60 px-4 py-4">
+                      <p className="text-[11px] uppercase tracking-[0.18em] text-zinc-500 font-bold">Affected files</p>
+                      <p className="text-3xl font-semibold text-zinc-100 mt-3">{selectedRepoAffectedFiles}</p>
+                    </div>
+                    <div className="rounded-lg border border-zinc-800 bg-zinc-950/60 px-4 py-4">
+                      <p className="text-[11px] uppercase tracking-[0.18em] text-zinc-500 font-bold">Detail records</p>
+                      <p className="text-3xl font-semibold text-blue-300 mt-3">{repoSecrets.length}</p>
+                    </div>
+                  </div>
+
+                  <div className="mt-4 rounded-lg border border-zinc-800 bg-zinc-950/60 px-4 py-4">
+                    <div>
+                      <p className="text-xs uppercase tracking-[0.2em] text-zinc-500 font-bold">Exposure status</p>
+                      <p className="text-sm text-zinc-400 mt-2 leading-6">
+                        {repoSecrets.length > 0
+                          ? `${selectedRepoTotalSecrets} exposed keys are currently tracked for this repository.`
+                          : selectedRepoTotalSecrets > 0
+                            ? `${selectedRepoTotalSecrets} exposed keys were detected in the last scan, but the detailed per-file breakdown is not available in this saved report yet.`
+                            : "No exposed keys are currently recorded for this repository."}
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {repoSecrets.length > 0 && (
+                <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+                  <div className={CARD}>
+                    <h3 className="text-sm font-medium text-zinc-200 mb-4">By secret type</h3>
+                    <div className="h-72 flex justify-center items-center">
+                      <Pie data={secretsPieData} options={commonOptions} />
+                    </div>
+                  </div>
+                  <div className={CARD}>
+                    <h3 className="text-sm font-medium text-zinc-200 mb-4">By file</h3>
+                    <div className="h-72">
+                      <Bar data={secretsBarData} options={barOptions} />
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {repoSecrets.length > 0 && (
+                <div className={PANEL}>
+                  <div className="px-5 py-4 border-b border-zinc-800 bg-zinc-950/40">
+                    <h3 className="text-sm font-semibold text-zinc-100">Stored findings</h3>
+                  </div>
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-left">
+                      <thead className="bg-zinc-950/30">
+                        <tr>
+                          {["Type", "File", "Line", "Author", "Email", "Commit Time"].map((cell) => (
+                            <th key={cell} className="px-4 py-3 text-xs uppercase tracking-[0.18em] text-zinc-500">
+                              {cell}
+                            </th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-zinc-800">
+                        {repoSecrets.map((secret, index) => (
+                          <tr key={`${secret.file}-${secret.line}-${index}`} className="hover:bg-zinc-800/20 transition-colors">
+                            <td className="px-4 py-4 text-sm text-blue-300">{secret.type || "Secret"}</td>
+                            <td className="px-4 py-4 text-sm text-zinc-300">{secret.file || "N/A"}</td>
+                            <td className="px-4 py-4 text-sm text-zinc-400">{secret.line ?? "N/A"}</td>
+                            <td className="px-4 py-4 text-sm text-zinc-300">{secret.author || "Unknown"}</td>
+                            <td className="px-4 py-4 text-sm text-zinc-400 font-mono">
+                              {secret.authorEmail || secret.email || "N/A"}
+                            </td>
+                            <td className="px-4 py-4 text-sm text-zinc-400">{formatDate(secret.commitTime)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+
+              <div className="flex justify-end gap-3 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setSelectedRepo(null)}
+                  className="px-4 py-2 rounded-md border border-zinc-700 bg-zinc-900 text-zinc-200 hover:bg-zinc-800"
+                >
+                  Close
+                </button>
+                <button
+                  type="button"
+                  onClick={() => window.open(selectedRepo.gitUrl, "_blank")}
+                  className="inline-flex items-center gap-2 px-4 py-2 rounded-md bg-blue-600 hover:bg-blue-500 text-white"
+                >
+                  Open Repository
+                  <ExternalLink className="w-4 h-4" />
+                </button>
+              </div>
             </div>
           </div>
         </div>
       )}
     </div>
   );
-};
-
-export default Report;
+}
