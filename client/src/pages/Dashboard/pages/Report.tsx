@@ -14,11 +14,18 @@ import {
 import {
   AlertTriangle,
   BarChart3,
+  Bot,
   CheckCircle2,
+  Cloud,
+  Database,
   ExternalLink,
   FileWarning,
   FolderGit2,
+  Github,
+  KeyRound,
+  Link2,
   ShieldCheck,
+  Sparkles,
   X,
 } from "lucide-react";
 import { userAuth } from "../../../context/Auth";
@@ -35,12 +42,21 @@ type RepoSecret = {
   secretType?: string;
   file?: string;
   line?: number | string;
+  secret?: string | null;
+  maskedSecret?: string | null;
   author?: string | null;
   email?: string | null;
   authorEmail?: string | null;
   commitTime?: string | null;
+  commitHash?: string | null;
+  snippet?: {
+    lines?: { num: number; text: string }[];
+    highlightLine?: number | null;
+  } | null;
   status?: string | null;
   severity?: string | null;
+  fixedByEmail?: string | null;
+  fixedAt?: string | null;
 };
 
 type RepoRecord = {
@@ -56,6 +72,41 @@ type RepoRecord = {
   UnverifiedRepositories?: number;
   vulnerabilities?: Record<string, RepoSecret[]>;
 };
+
+function getSecretTypeMeta(secretType?: string | null) {
+  const value = String(secretType || "").toLowerCase();
+
+  if (value.includes("redis")) {
+    return { label: "Redis", tone: "text-rose-300 border-rose-500/20 bg-rose-500/10", icon: Database };
+  }
+  if (value.includes("mongo")) {
+    return { label: "MongoDB", tone: "text-emerald-300 border-emerald-500/20 bg-emerald-500/10", icon: Database };
+  }
+  if (value.includes("aws")) {
+    return { label: "AWS", tone: "text-amber-300 border-amber-500/20 bg-amber-500/10", icon: Cloud };
+  }
+  if (value.includes("gcp") || value.includes("google")) {
+    return { label: "GCP", tone: "text-sky-300 border-sky-500/20 bg-sky-500/10", icon: Cloud };
+  }
+  if (value.includes("gemini")) {
+    return { label: "Gemini", tone: "text-violet-300 border-violet-500/20 bg-violet-500/10", icon: Sparkles };
+  }
+  if (value.includes("github")) {
+    return { label: "GitHub", tone: "text-zinc-200 border-zinc-700 bg-zinc-800/60", icon: Github };
+  }
+  if (value.includes("openai")) {
+    return { label: "OpenAI", tone: "text-emerald-300 border-emerald-500/20 bg-emerald-500/10", icon: Bot };
+  }
+
+  return { label: "Credential", tone: "text-blue-300 border-blue-500/20 bg-blue-500/10", icon: KeyRound };
+}
+
+function getHighlightedSnippet(entry: RepoSecret) {
+  const lines = entry.snippet?.lines || [];
+  const highlightLine = entry.snippet?.highlightLine;
+  if (!lines.length) return null;
+  return lines.find((line) => line.num === highlightLine) || lines[0] || null;
+}
 
 export default function Report() {
   const { user, repo, company, role, organization, token } = userAuth() || {};
@@ -111,12 +162,18 @@ export default function Report() {
               secretType: entry.secretType || "Secret",
               file: entry.file || undefined,
               line: entry.line ?? undefined,
+              secret: entry.secret || null,
+              maskedSecret: entry.maskedSecret || null,
               author: entry.author || null,
               email: entry.authorEmail || null,
               authorEmail: entry.authorEmail || null,
               commitTime: entry.commitTime || null,
+              commitHash: entry.commitHash || null,
+              snippet: entry.snippet || null,
               status: entry.status || "OPEN",
               severity: entry.severity || "MEDIUM",
+              fixedByEmail: entry.fixedByEmail || null,
+              fixedAt: entry.fixedAt || null,
             }))
           );
           return;
@@ -536,37 +593,201 @@ export default function Report() {
 
               {!detailsLoading && repoSecrets.length > 0 && (
                 <div className={PANEL}>
-                  <div className="px-5 py-4 border-b border-zinc-800 bg-zinc-950/40">
-                    <h3 className="text-sm font-semibold text-zinc-100">Stored findings</h3>
+                  <div className="px-5 py-4 border-b border-zinc-800 bg-zinc-950/40 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                    <div>
+                      <h3 className="text-sm font-semibold text-zinc-100">Stored findings</h3>
+                      <p className="text-xs text-zinc-500 mt-1">
+                        Saved vulnerability records with API type, line ownership, code context, and patch trail.
+                      </p>
+                    </div>
+                    <span className="px-2.5 py-1 rounded-full border border-zinc-700 text-[10px] font-bold uppercase tracking-[0.18em] text-zinc-300">
+                      {repoSecrets.length} records
+                    </span>
                   </div>
-                  <div className="overflow-x-auto">
-                    <table className="w-full text-left">
-                      <thead className="bg-zinc-950/30">
-                        <tr>
-                          {["Type", "File", "Line", "Author", "Email", "Severity", "Status", "Commit Time"].map((cell) => (
-                            <th key={cell} className="px-4 py-3 text-xs uppercase tracking-[0.18em] text-zinc-500">
-                              {cell}
-                            </th>
-                          ))}
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-zinc-800">
-                        {repoSecrets.map((secret, index) => (
-                          <tr key={`${secret.file}-${secret.line}-${index}`} className="hover:bg-zinc-800/20 transition-colors">
-                            <td className="px-4 py-4 text-sm text-blue-300">{secret.secretType || secret.type || "Secret"}</td>
-                            <td className="px-4 py-4 text-sm text-zinc-300">{secret.file || "N/A"}</td>
-                            <td className="px-4 py-4 text-sm text-zinc-400">{secret.line ?? "N/A"}</td>
-                            <td className="px-4 py-4 text-sm text-zinc-300">{secret.author || "Unknown"}</td>
-                            <td className="px-4 py-4 text-sm text-zinc-400 font-mono">
-                              {secret.authorEmail || secret.email || "N/A"}
-                            </td>
-                            <td className="px-4 py-4 text-sm text-zinc-300">{secret.severity || "MEDIUM"}</td>
-                            <td className="px-4 py-4 text-sm text-zinc-300">{secret.status || "OPEN"}</td>
-                            <td className="px-4 py-4 text-sm text-zinc-400">{formatDate(secret.commitTime)}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
+                  <div className="p-5 space-y-4">
+                    {repoSecrets.map((secret, index) => {
+                      const snippetLine = getHighlightedSnippet(secret);
+                      const serviceMeta = getSecretTypeMeta(secret.secretType || secret.type);
+                      const ServiceIcon = serviceMeta.icon;
+                      const secretValue = secret.maskedSecret || secret.secret || "Stored in record";
+                      const fixedLabel =
+                        secret.status === "FIXED"
+                          ? secret.fixedByEmail
+                            ? `${secret.fixedByEmail}${secret.fixedAt ? ` · ${formatDate(secret.fixedAt)}` : ""}`
+                            : "Marked fixed"
+                          : "Still open";
+
+                      return (
+                        <div
+                          key={secret._id || `${secret.file}-${secret.line}-${index}`}
+                          className="rounded-xl border border-zinc-800 bg-zinc-950/50 p-4 md:p-5"
+                        >
+                          <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
+                            <div className="min-w-0 flex-1 space-y-4">
+                              <div className="flex flex-wrap items-center gap-2">
+                                <span className={`inline-flex items-center gap-2 rounded-full border px-3 py-1 text-[11px] font-semibold ${serviceMeta.tone}`}>
+                                  <ServiceIcon className="h-3.5 w-3.5" />
+                                  {serviceMeta.label}
+                                </span>
+                                <span className="rounded-full border border-zinc-700 bg-zinc-900 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.16em] text-zinc-300">
+                                  {secret.secretType || secret.type || "Secret"}
+                                </span>
+                                <span
+                                  className={`rounded-full border px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.16em] ${
+                                    secret.status === "FIXED"
+                                      ? "border-emerald-500/20 bg-emerald-500/10 text-emerald-300"
+                                      : "border-orange-500/20 bg-orange-500/10 text-orange-300"
+                                  }`}
+                                >
+                                  {secret.status || "OPEN"}
+                                </span>
+                                <span className="rounded-full border border-zinc-700 bg-zinc-900 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.16em] text-zinc-300">
+                                  {secret.severity || "MEDIUM"}
+                                </span>
+                              </div>
+
+                              <div className="space-y-1">
+                                <h4 className="text-base font-semibold text-zinc-100 break-all">
+                                  {secret.file || "Unknown file"}
+                                </h4>
+                                <div className="flex flex-wrap gap-x-5 gap-y-2 text-xs text-zinc-500">
+                                  <span>Line: <span className="text-zinc-300">{secret.line ?? snippetLine?.num ?? "N/A"}</span></span>
+                                  <span>Author: <span className="text-zinc-300">{secret.author || "Unknown"}</span></span>
+                                  <span>Email: <span className="text-zinc-300 break-all">{secret.authorEmail || secret.email || "N/A"}</span></span>
+                                </div>
+                              </div>
+
+                              <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                                <div className="rounded-lg border border-zinc-800 bg-zinc-900/70 p-4">
+                                  <p className="text-[11px] font-bold uppercase tracking-[0.18em] text-zinc-500">Recorded key</p>
+                                  <p className="mt-3 break-all rounded-lg border border-zinc-800 bg-zinc-950/80 px-3 py-3 font-mono text-sm text-rose-200">
+                                    {secretValue}
+                                  </p>
+                                  <div className="mt-3 flex flex-wrap gap-x-4 gap-y-2 text-xs text-zinc-500">
+                                    <span>Commit time: <span className="text-zinc-300">{formatDate(secret.commitTime)}</span></span>
+                                    <span>Commit: <span className="text-zinc-300 font-mono">{secret.commitHash || "N/A"}</span></span>
+                                  </div>
+                                </div>
+
+                                <div className="rounded-lg border border-zinc-800 bg-zinc-900/70 p-4">
+                                  <p className="text-[11px] font-bold uppercase tracking-[0.18em] text-zinc-500">Patch record</p>
+                                  <p className="mt-3 text-sm font-medium text-zinc-100">{fixedLabel}</p>
+                                  <div className="mt-3 grid grid-cols-2 gap-3 text-xs">
+                                    <div className="rounded-lg border border-zinc-800 bg-zinc-950/70 px-3 py-3">
+                                      <p className="text-zinc-500 uppercase tracking-[0.16em]">Status</p>
+                                      <p className="mt-2 text-zinc-200">{secret.status || "OPEN"}</p>
+                                    </div>
+                                    <div className="rounded-lg border border-zinc-800 bg-zinc-950/70 px-3 py-3">
+                                      <p className="text-zinc-500 uppercase tracking-[0.16em]">Type / API</p>
+                                      <p className="mt-2 text-zinc-200">{secret.secretType || secret.type || "Secret"}</p>
+                                    </div>
+                                  </div>
+                                </div>
+                              </div>
+
+                              <div className="rounded-lg border border-zinc-800 bg-zinc-900/70 p-4">
+                                <div className="flex items-center justify-between gap-3">
+                                  <div>
+                                    <p className="text-[11px] font-bold uppercase tracking-[0.18em] text-zinc-500">Recorded code line</p>
+                                    <p className="mt-1 text-xs text-zinc-500">
+                                      {snippetLine?.num ? `Saved context from line ${snippetLine.num}` : "Saved context unavailable for this older record"}
+                                    </p>
+                                  </div>
+                                  <span className="inline-flex items-center gap-2 rounded-full border border-blue-500/20 bg-blue-500/10 px-3 py-1 text-[11px] font-semibold text-blue-300">
+                                    <Link2 className="h-3.5 w-3.5" />
+                                    {snippetLine?.num ? `L${snippetLine.num}` : secret.line != null ? `L${secret.line}` : "Line N/A"}
+                                  </span>
+                                </div>
+
+                                {snippetLine ? (
+                                  <div className="mt-4 overflow-hidden rounded-lg border border-zinc-800 bg-[#0b1120]">
+                                    <div className="flex items-start gap-3 px-4 py-3">
+                                      <span className="pt-0.5 text-[10px] font-mono text-blue-300">{snippetLine.num}</span>
+                                      <code className="whitespace-pre-wrap break-all font-mono text-sm leading-6 text-zinc-100">
+                                        {snippetLine.text}
+                                      </code>
+                                    </div>
+                                  </div>
+                                ) : (
+                                  <div className="mt-4 rounded-lg border border-dashed border-zinc-700 bg-zinc-950/70 px-4 py-4 text-sm leading-6 text-zinc-400">
+                                    This saved finding does not include a code snippet yet. The record still preserves the file path, line, API type, author trace, and patch status so you can review it without scanning again.
+                                  </div>
+                                )}
+                              </div>
+
+                              <div className="rounded-lg border border-zinc-800 bg-zinc-900/70 p-4">
+                                <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                                  <div>
+                                    <p className="text-[11px] font-bold uppercase tracking-[0.18em] text-zinc-500">Who patched this</p>
+                                    <p className="mt-1 text-xs text-zinc-500">
+                                      Fix ownership recorded when this finding was marked resolved after patch verification.
+                                    </p>
+                                  </div>
+                                  <span
+                                    className={`inline-flex items-center gap-2 rounded-full border px-3 py-1 text-[11px] font-semibold ${
+                                      secret.status === "FIXED"
+                                        ? "border-emerald-500/20 bg-emerald-500/10 text-emerald-300"
+                                        : "border-zinc-700 bg-zinc-950 text-zinc-300"
+                                    }`}
+                                  >
+                                    <ShieldCheck className="h-3.5 w-3.5" />
+                                    {secret.status === "FIXED" ? "Patch recorded" : "Not patched yet"}
+                                  </span>
+                                </div>
+
+                                <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-3">
+                                  <div className="rounded-lg border border-zinc-800 bg-zinc-950/70 px-4 py-4">
+                                    <p className="text-[11px] font-bold uppercase tracking-[0.18em] text-zinc-500">Patched by</p>
+                                    <p className="mt-3 break-all text-sm font-medium text-zinc-100">
+                                      {secret.fixedByEmail || (secret.status === "FIXED" ? "Recorded as fixed" : "Pending")}
+                                    </p>
+                                  </div>
+                                  <div className="rounded-lg border border-zinc-800 bg-zinc-950/70 px-4 py-4">
+                                    <p className="text-[11px] font-bold uppercase tracking-[0.18em] text-zinc-500">Patched at</p>
+                                    <p className="mt-3 text-sm font-medium text-zinc-100">
+                                      {secret.fixedAt ? formatDate(secret.fixedAt) : secret.status === "FIXED" ? "Recorded" : "N/A"}
+                                    </p>
+                                  </div>
+                                  <div className="rounded-lg border border-zinc-800 bg-zinc-950/70 px-4 py-4">
+                                    <p className="text-[11px] font-bold uppercase tracking-[0.18em] text-zinc-500">Resolution state</p>
+                                    <p className="mt-3 text-sm font-medium text-zinc-100">{secret.status || "OPEN"}</p>
+                                  </div>
+                                </div>
+                              </div>
+                            </div>
+
+                            <div className="w-full xl:max-w-[280px] space-y-3">
+                              <div className="rounded-lg border border-zinc-800 bg-zinc-900/70 p-4">
+                                <p className="text-[11px] font-bold uppercase tracking-[0.18em] text-zinc-500">Author trace</p>
+                                <p className="mt-3 text-sm font-medium text-zinc-100">{secret.author || "Unknown"}</p>
+                                <p className="mt-1 break-all text-sm text-zinc-400">{secret.authorEmail || secret.email || "N/A"}</p>
+                              </div>
+                              <div className="rounded-lg border border-zinc-800 bg-zinc-900/70 p-4">
+                                <p className="text-[11px] font-bold uppercase tracking-[0.18em] text-zinc-500">Record health</p>
+                                <div className="mt-3 space-y-3 text-sm">
+                                  <div className="flex items-center justify-between gap-3">
+                                    <span className="text-zinc-500">Snippet</span>
+                                    <span className={snippetLine ? "text-emerald-300" : "text-zinc-400"}>
+                                      {snippetLine ? "Stored" : "Not stored"}
+                                    </span>
+                                  </div>
+                                  <div className="flex items-center justify-between gap-3">
+                                    <span className="text-zinc-500">Patched by</span>
+                                    <span className="text-right text-zinc-300 break-all">
+                                      {secret.fixedByEmail || (secret.status === "FIXED" ? "Recorded as fixed" : "Pending")}
+                                    </span>
+                                  </div>
+                                  <div className="flex items-center justify-between gap-3">
+                                    <span className="text-zinc-500">Updated</span>
+                                    <span className="text-right text-zinc-300">{formatDate(secret.fixedAt || secret.commitTime)}</span>
+                                  </div>
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
                   </div>
                 </div>
               )}
