@@ -12,6 +12,24 @@ const repoSchema = new mongoose.Schema({
     trim: true,
     unique: true
   },
+  repoName: {
+    type: String,
+    default: null
+  },
+  organizationId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: "Organization",
+    default: null
+  },
+  ownerUserId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: "User",
+    default: null
+  },
+  defaultBranch: {
+    type: String,
+    default: null
+  },
   Branch: {
     type: String,
     default: null

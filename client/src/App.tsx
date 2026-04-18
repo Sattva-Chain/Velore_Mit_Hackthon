@@ -10,15 +10,18 @@ import {Toaster} from "react-hot-toast"
 import Home from './pages/Home'
 import EmployeeLogin from './components/EmployLogin'
 import EmployeeSignup from './components/EmploySignp'
-import Login from './pages/loginsysteam/Login'
+import LoginPage from './pages/auth/LoginPage'
+import RegisterPage from './pages/auth/RegisterPage'
+import InviteAcceptPage from './pages/auth/InviteAcceptPage'
 import MainDashBoardLayout from './pages/Dashboard/MainDashBoardLayout'
-import Analysis2 from './pages/Dashboard/pages/Analysis'
+import DashboardHome from './pages/Dashboard/pages/DashboardHome'
 import Settings from './pages/Dashboard/pages/Setting'
 import Scans from './pages/Dashboard/pages/Scans'
-import MangeEmploy from './pages/Dashboard/pages/MangeEmploy'
+import TeamHub from './pages/Dashboard/pages/TeamHub'
 import { userAuth } from './context/Auth'
 import EmployedLogs from './pages/Dashboard/pages/EmployedLogs'
 import Report from './pages/Dashboard/pages/Report'
+import OrganizationVulnerabilities from './pages/Dashboard/pages/OrganizationVulnerabilities'
 function App() {
 
 const { company, user, token, sessionHydrated } = userAuth()!
@@ -48,10 +51,12 @@ const { company, user, token, sessionHydrated } = userAuth()!
             ) : company || user || token ? (
               <Navigate to="/Dashboard2" replace />
             ) : (
-              <Login />
+              <LoginPage />
             )
           }
         />
+      <Route path='/register' element={<RegisterPage/>}/>
+      <Route path='/invite/accept' element={<InviteAcceptPage/>}/>
     
       <Route path='/login' element={<EmployeeLogin/>}/>
       <Route path='/singup' element={<EmployeeSignup/>}/>
@@ -63,12 +68,14 @@ const { company, user, token, sessionHydrated } = userAuth()!
       </Route>
       {/* New DashBoard */}
        <Route path='/Dashboard2' element={<MainDashBoardLayout/>}>
-         <Route index  element={<Analysis2/>} />
+         <Route index  element={<DashboardHome/>} />
          <Route path='settings'  element={<Settings/>} />
          <Route path='scans'  element={<Scans/>} />
          <Route path='reports'  element={<Report/>} />
+         <Route path='vulnerabilities'  element={<OrganizationVulnerabilities/>} />
          <Route path='manegEmploy/employedLogs/:id'  element={<EmployedLogs/>} />
-         <Route path='manegEmploy'  element={<MangeEmploy/>} />
+         <Route path='manegEmploy'  element={<TeamHub/>} />
+         <Route path='team'  element={<TeamHub/>} />
       </Route>
     </Routes>
     </>

@@ -1,4 +1,5 @@
 // server.js
+require("dotenv").config();
 const express = require("express");
 const multer = require("multer");
 const { execFile } = require("child_process");
@@ -11,8 +12,13 @@ const util = require("util");
 const cors = require("cors");
 const mongoose = require("mongoose");
 const router = require("./routes/user");
+const authRouter = require("./routes/auth");
+const organizationRouter = require("./routes/organizations");
 const { default: user } = require("./models/user");
 const { default: comp } = require("./models/company");
+const { getGitBlameInfo, emptyBlameInfo } = require("./utils/gitBlame");
+const { resolveAuthUserFromHeader } = require("./middleware/auth");
+const { persistScanVulnerabilities } = require("./services/vulnerabilityPersistence");
 const {
   createSession,
   getSession,
@@ -51,6 +57,8 @@ mongoose
   .catch((err) => console.error("❌ MongoDB Error:", err.message));
 
 app.use("/api", router);
+app.use("/api/auth", authRouter);
+app.use("/api/organizations", organizationRouter);
 
 // Upload + Temp
 const uploadDir = path.join(__dirname, "uploads");
@@ -1003,6 +1011,26 @@ async function formatResults(findings = [], repoPath = null, isGitRepo = false) 
     });
   }
 
+  const blameCache = new Map();
+  for (const row of rows) {
+    const parsedLine = parseInt(String(row.line), 10);
+    if (!isGitRepo || !repoPath || !row.file || row.file === "unknown" || !Number.isFinite(parsedLine) || parsedLine < 1) {
+      Object.assign(row, emptyBlameInfo());
+      continue;
+    }
+
+    const cacheKey = `${row.file}:${parsedLine}`;
+    if (!blameCache.has(cacheKey)) {
+      blameCache.set(cacheKey, getGitBlameInfo(row.file, parsedLine, repoPath));
+    }
+
+    try {
+      Object.assign(row, await blameCache.get(cacheKey));
+    } catch {
+      Object.assign(row, emptyBlameInfo());
+    }
+  }
+
   if (repoPath) {
     const pending = rows.filter((r) => !r.snippet && rowNeedleList(r).length > 0);
     assignSnippetsBasenamePass(repoPath, pending);
@@ -1024,6 +1052,12 @@ async function formatResults(findings = [], repoPath = null, isGitRepo = false) 
       line: r.line,
       commit: r.commit,
       branch: r.branch,
+      author: r.author,
+      authorEmail: r.authorEmail || r.email,
+      email: r.email,
+      commitTime: r.commitTime,
+      commitHash: r.commitHash,
+      assignedTo: r.assignedTo,
       snippet: r.snippet,
       aiAnalysis: r.aiAnalysis,
       aiSource: r.aiSource,
@@ -1043,7 +1077,7 @@ async function withRemediationMeta(formatted, session) {
   };
 }
 
-async function buildScanResponse(scanPath, isGitRepo, extraMeta = {}) {
+async function buildScanResponse(scanPath, isGitRepo, extraMeta = {}, persistenceContext = null) {
   let findings = await runTrufflehog(scanPath);
   findings = findings.filter((f) => {
     const file = getFindingFileKey(f);
@@ -1053,6 +1087,27 @@ async function buildScanResponse(scanPath, isGitRepo, extraMeta = {}) {
 
   const aiEnriched = await enrichFindingsWithAi(findings);
   const formatted = await formatResults(aiEnriched.findings, scanPath, isGitRepo);
+  const resolvedBranch = extraMeta.branch || (isGitRepo ? await getGitBranchSafe(scanPath) : null);
+
+  if (resolvedBranch && formatted?.vulnerabilities) {
+    Object.values(formatted.vulnerabilities).forEach((items) => {
+      items.forEach((item) => {
+        if (!item.branch || item.branch === "N/A") {
+          item.branch = resolvedBranch;
+        }
+      });
+    });
+  }
+
+  if (persistenceContext) {
+    await persistFormattedScan(formatted, {
+      ...persistenceContext,
+      repoPath: scanPath,
+      branch: resolvedBranch || persistenceContext.branch || null,
+      sourceKind: extraMeta.sourceKind || persistenceContext.sourceKind || null,
+      repoUrl: extraMeta.repoUrl || persistenceContext.repoUrl || null,
+    });
+  }
 
   return {
     ...formatted,
@@ -1063,9 +1118,57 @@ async function buildScanResponse(scanPath, isGitRepo, extraMeta = {}) {
         reviewedCount: aiEnriched.stats.reviewed,
         confirmedCount: aiEnriched.stats.confirmed,
       },
+      branch: resolvedBranch,
       ...extraMeta,
     },
   };
+}
+
+async function getGitBranchSafe(repoPath) {
+  if (!repoPath) return null;
+  try {
+    const { stdout } = await execFileAsync("git", ["rev-parse", "--abbrev-ref", "HEAD"], {
+      cwd: repoPath,
+      timeout: 1000 * 10,
+    });
+    const branch = String(stdout || "").trim();
+    return branch && branch !== "HEAD" ? branch : null;
+  } catch {
+    return null;
+  }
+}
+
+async function buildPersistenceContext(req, repoPath, defaults = {}) {
+  const actor = await resolveAuthUserFromHeader(req.headers.authorization);
+  if (!actor) return null;
+
+  return {
+    actor,
+    organizationId: actor.organizationId || null,
+    repoUrl: defaults.repoUrl || null,
+    repoPath: repoPath || null,
+    branch: defaults.branch || null,
+    sourceKind: defaults.sourceKind || null,
+  };
+}
+
+async function persistFormattedScan(formatted, persistenceContext) {
+  if (!persistenceContext?.actor || !formatted || formatted.error) return null;
+
+  try {
+    return await persistScanVulnerabilities({
+      formatted,
+      actor: persistenceContext.actor,
+      organizationId: persistenceContext.organizationId || null,
+      repoUrl: persistenceContext.repoUrl || null,
+      repoPath: persistenceContext.repoPath || null,
+      branch: persistenceContext.branch || null,
+      sourceKind: persistenceContext.sourceKind || null,
+    });
+  } catch (error) {
+    console.error("Failed to persist vulnerabilities:", error.message);
+    return null;
+  }
 }
 
 function buildAuthedGithubUrl(repoUrl, token) {
@@ -1085,7 +1188,7 @@ function buildAuthedGithubUrl(repoUrl, token) {
   return trimmedRepo;
 }
 
-async function buildFreshRemoteVerificationScan({ repoUrl, branchName, githubToken }) {
+async function buildFreshRemoteVerificationScan({ repoUrl, branchName, githubToken, persistenceContext = null }) {
   const verificationPath = path.join(tempDir, `${Date.now()}-repo-verify`);
   const cloneUrl = buildAuthedGithubUrl(repoUrl, githubToken);
 
@@ -1100,13 +1203,14 @@ async function buildFreshRemoteVerificationScan({ repoUrl, branchName, githubTok
       mode: "post-push-verification",
       sourceKind: "git",
       repoUrl: repoUrl || null,
+      branch: branchName || null,
       verification: {
         performed: true,
         scannedAt: new Date().toISOString(),
         branch: branchName || null,
         source: "fresh-remote-clone",
       },
-    });
+    }, persistenceContext);
   } finally {
     try { fs.rmSync(verificationPath, { recursive: true, force: true }); } catch {}
   }
@@ -1119,18 +1223,20 @@ async function verifySessionAfterPush(session, githubToken) {
           repoUrl: session.repoUrl,
           branchName: session.lastBranchName,
           githubToken,
+          persistenceContext: session.persistenceContext || null,
         })
       : await buildScanResponse(session.repoPath, session.sourceType === "git", {
           mode: "post-push-verification",
           sourceKind: session.sourceType,
           repoUrl: session.repoUrl || null,
+          branch: session.lastBranchName || null,
           verification: {
             performed: true,
             scannedAt: new Date().toISOString(),
             branch: session.lastBranchName || null,
             source: "workspace-fallback",
           },
-        });
+        }, session.persistenceContext || null);
 
   updateSessionResults(session.sessionId, formatted);
   return withRemediationMeta(formatted, session);
@@ -1155,6 +1261,7 @@ app.post("/scan-url", async (req, res) => {
     await execFileAsync("git", ["clone", "--depth", "1", repoURL, clonePath]);
     console.log("✅ Repo cloned:", clonePath);
 
+    const branch = await getGitBranchSafe(clonePath);
     let findings = await runTrufflehog(clonePath);
 
     // ✅ Filter ignored files
@@ -1166,6 +1273,17 @@ app.post("/scan-url", async (req, res) => {
     findings = filterEntropyFalsePositives(findings, clonePath);
 
     const formatted = await formatResults(findings, clonePath, true);
+    Object.values(formatted.vulnerabilities || {}).forEach((items) => {
+      items.forEach((item) => {
+        if (!item.branch || item.branch === "N/A") item.branch = branch || "N/A";
+      });
+    });
+    const persistenceContext = await buildPersistenceContext(req, clonePath, {
+      repoUrl: repoURL,
+      branch,
+      sourceKind: "git",
+    });
+    await persistFormattedScan(formatted, persistenceContext);
     return res.json(formatted);
   } catch (err) {
     return res.status(500).json({ error: true, message: err.message });
@@ -1196,6 +1314,12 @@ app.post("/scan-zip", upload.single("zipfile"), async (req, res) => {
     findings = filterEntropyFalsePositives(findings, extractPath);
 
     const formatted = await formatResults(findings, extractPath, false);
+    const persistenceContext = await buildPersistenceContext(req, extractPath, {
+      repoUrl: null,
+      branch: null,
+      sourceKind: "zip",
+    });
+    await persistFormattedScan(formatted, persistenceContext);
     return res.json(formatted);
   } catch (err) {
     return res.status(500).json({ error: true, message: err.message });
@@ -1213,16 +1337,25 @@ app.post("/scan-url-remediation", async (req, res) => {
 
   try {
     await execFileAsync("git", ["clone", "--depth", "1", repoURL, clonePath]);
+    const branch = await getGitBranchSafe(clonePath);
+    const persistenceContext = await buildPersistenceContext(req, clonePath, {
+      repoUrl: repoURL,
+      branch,
+      sourceKind: "git",
+    });
     const formatted = await buildScanResponse(clonePath, true, {
       mode: "scan",
       sourceKind: "git",
       repoUrl: repoURL,
-    });
+      branch,
+    }, persistenceContext);
     const session = createSession({
       repoPath: clonePath,
       sourceType: "git",
       repoUrl: repoURL,
       results: formatted,
+      branch,
+      persistenceContext,
     });
     return res.json(await withRemediationMeta(formatted, session));
   } catch (err) {
@@ -1240,17 +1373,23 @@ app.post("/scan-zip-remediation", upload.single("zipfile"), async (req, res) => 
   try {
     fs.mkdirSync(extractPath, { recursive: true });
     new AdmZip(zipPath).extractAllTo(extractPath);
+    const persistenceContext = await buildPersistenceContext(req, extractPath, {
+      repoUrl: null,
+      branch: null,
+      sourceKind: "zip",
+    });
 
     const formatted = await buildScanResponse(extractPath, false, {
       mode: "scan",
       sourceKind: "zip",
       repoUrl: null,
-    });
+    }, persistenceContext);
     const session = createSession({
       repoPath: extractPath,
       sourceType: "zip",
       repoUrl: null,
       results: formatted,
+      persistenceContext,
     });
     return res.json(await withRemediationMeta(formatted, session));
   } catch (err) {
@@ -1282,7 +1421,8 @@ app.post("/patch/apply", async (req, res) => {
       mode: "post-patch-scan",
       sourceKind: session.sourceType,
       repoUrl: session.repoUrl || null,
-    });
+      branch: session.lastBranchName || session.branch || null,
+    }, session.persistenceContext || null);
     updateSessionResults(session.sessionId, formatted);
     const diff = await getGitDiff(session);
 
@@ -1358,7 +1498,8 @@ app.post("/patch/rollback", async (req, res) => {
       mode: "post-rollback-scan",
       sourceKind: session.sourceType,
       repoUrl: session.repoUrl || null,
-    });
+      branch: session.lastBranchName || session.branch || null,
+    }, session.persistenceContext || null);
     updateSessionResults(session.sessionId, formatted);
     const diff = await getGitDiff(session);
 

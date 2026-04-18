@@ -1,38 +1,43 @@
-import { createContext, useState, useEffect, useContext, useCallback, type ReactNode } from "react";
+import { createContext, useState, useEffect, useContext, useCallback, useMemo, type ReactNode } from "react";
 import axios from "axios";
-import { useNavigate } from "react-router-dom"; // Fixed: Added useNavigate import
+import { useNavigate } from "react-router-dom";
 
-// 1. Expanded UserData to include fields used in Dashboard/Report
-interface UserData {
+const API_BASE_URL = "http://localhost:3000";
+const AUTH_TOKEN_KEY = "leakshield.auth.token";
+
+export type AuthRole = "SOLO_DEVELOPER" | "ORG_OWNER" | "EMPLOYEE" | string;
+
+export interface SessionUser {
   _id: string;
   email: string;
-  role?: string;
+  role?: AuthRole;
+  organizationId?: string | null;
+  companyId?: string | null;
   gitUrl?: string[];
   Branch?: string;
   LastScanned?: string;
   userType?: string;
-  name?: string;     // Add this
-  number?: string;   // Add this
-  empId?: string;    // Add this
-  // Missing fields fixed here:
+  name?: string | null;
+  number?: string;
+  empId?: string;
+  isActive?: boolean;
   TotalRepositories?: number;
   VerifiedRepositories?: number;
   UnverifiedRepositories?: number;
 }
 
-// 2. Updated Repository to be used as an Array in most places
 export interface Repository {
   _id: string;
   userId: string;
   gitUrl: string;
+  repoName?: string | null;
   Branch: string;
   LastScanned: string;
-  Status: "Vulnerable" | "Safe" | "Pending";
+  Status: "Vulnerable" | "Safe" | "Pending" | "Clean" | "Error";
   createdAt: string;
   updatedAt: string;
 }
 
-// 3. Expanded CompanyData
 export interface OrgDashboardStats {
   totalRepositories: number;
   verifiedRepositories: number;
@@ -41,130 +46,269 @@ export interface OrgDashboardStats {
   scannedMembersCount: number;
 }
 
-interface CompanyData {
+export interface OrganizationOwner {
+  _id: string;
+  name?: string | null;
+  email?: string | null;
+  role?: string | null;
+}
+
+export interface OrganizationMember {
+  _id: string;
+  name?: string | null;
+  email: string;
+  role: string;
+  status: string;
+  invitedAt?: string | null;
+  joinedAt?: string | null;
+}
+
+export interface OrganizationInvite {
+  _id?: string;
+  email: string;
+  role: "EMPLOYEE";
+  token?: string;
+  status: "PENDING" | "ACCEPTED" | "EXPIRED";
+  invitedAt?: string;
+  acceptedAt?: string | null;
+}
+
+export interface OrganizationData {
+  _id: string;
+  name: string;
+  slug: string;
+  owner?: OrganizationOwner | null;
+  members: OrganizationMember[];
+  invites: OrganizationInvite[];
+  totalMembers?: number;
+  summary?: {
+    totalVulnerabilities: number;
+    open: number;
+    fixed: number;
+    ignored: number;
+    repos: number;
+  };
+}
+
+export interface CompanyData {
   _id: string;
   companyName: string;
-  CompanyURL: string;
-  emailId: string;
-  totalRepositories?: string;
-  totalEmployees: string;
+  CompanyURL?: string;
+  emailId?: string;
+  totalRepositories?: string | number;
+  totalEmployees: string | number;
   loggedInCount?: number;
   employees?: Record<string, unknown>[];
-  /** Legacy API shape — normalized into `employees` on load */
   allEmployees?: Record<string, unknown>[];
   developersCount?: number;
   vulnerableCount?: number;
   dashboardStats?: OrgDashboardStats;
 }
 
-
+interface PersistedSession {
+  token: string | null;
+  user: SessionUser | null;
+  organization: OrganizationData | null;
+  company: CompanyData | null;
+  repo: Repository[] | null;
+}
 
 interface AuthContextType {
   token: string | null;
-  user: UserData | null;
-  repo: Repository[] | null; // Fixed: Changed from single object to Array
+  user: SessionUser | null;
+  repo: Repository[] | null;
   company: CompanyData | null;
-  /** True after first load from Electron / localStorage */
+  organization: OrganizationData | null;
+  role: AuthRole | null;
+  isLegacyCompanySession: boolean;
   sessionHydrated: boolean;
   authReady: boolean;
-  setUser: React.Dispatch<React.SetStateAction<UserData | null>>;
+  setUser: React.Dispatch<React.SetStateAction<SessionUser | null>>;
   setRepo: React.Dispatch<React.SetStateAction<Repository[] | null>>;
   setCompany: React.Dispatch<React.SetStateAction<CompanyData | null>>;
+  setOrganization: React.Dispatch<React.SetStateAction<OrganizationData | null>>;
   setToken: (token: string | null) => Promise<void>;
+  setSession: (session: PersistedSession) => Promise<void>;
   login: (token: string) => Promise<void>;
   logout: () => Promise<void>;
   refreshUser: () => Promise<void>;
 }
 
-function mergeUserWithRepos(u: UserData, repos: Repository[]): UserData {
+function mergeUserWithRepos(user: SessionUser, repos: Repository[]): SessionUser {
   const times = repos
-    .map((r) => r.LastScanned)
+    .map((repo) => repo.LastScanned)
     .filter(Boolean)
-    .map((d) => new Date(d as string).getTime())
-    .filter((t) => !Number.isNaN(t));
+    .map((value) => new Date(value).getTime())
+    .filter((value) => !Number.isNaN(value));
+
   const maxTs = times.length ? Math.max(...times) : 0;
-  const safeRepos = repos.filter((r) => r.Status === "Safe").length;
-  const vulnRepos = repos.filter((r) => r.Status === "Vulnerable").length;
+  const safeRepos = repos.filter((repo) => repo.Status === "Safe" || repo.Status === "Clean").length;
+  const vulnRepos = repos.filter((repo) => repo.Status === "Vulnerable").length;
   const otherRepos = repos.length - safeRepos - vulnRepos;
 
-  if (repos.length === 0) {
-    return { ...u };
-  }
-
   return {
-    ...u,
-    LastScanned: maxTs ? new Date(maxTs).toISOString() : u.LastScanned,
-    TotalRepositories: repos.length,
+    ...user,
+    LastScanned: maxTs ? new Date(maxTs).toISOString() : user.LastScanned,
+    TotalRepositories: repos.length || user.TotalRepositories || 0,
     VerifiedRepositories: safeRepos,
     UnverifiedRepositories: vulnRepos + Math.max(0, otherRepos),
   };
+}
+
+function normalizeLegacyCompany(payload: CompanyData): CompanyData {
+  const { allEmployees, employees, ...rest } = payload || ({} as CompanyData);
+  const memberList = (employees ?? allEmployees ?? []) as Record<string, unknown>[];
+  return {
+    ...rest,
+    employees: memberList,
+    totalEmployees: payload?.totalEmployees ?? memberList.length,
+  };
+}
+
+function normalizeOrganizationAsCompany(organization: OrganizationData): CompanyData {
+  return {
+    _id: organization._id,
+    companyName: organization.name,
+    CompanyURL: undefined,
+    emailId: organization.owner?.email || "",
+    totalEmployees: organization.totalMembers ?? organization.members.length,
+    employees: organization.members as unknown as Record<string, unknown>[],
+    developersCount: organization.members.filter((member) => member.role === "EMPLOYEE").length,
+    vulnerableCount: organization.summary?.open ?? 0,
+    dashboardStats: {
+      totalRepositories: organization.summary?.repos ?? 0,
+      verifiedRepositories: organization.summary?.fixed ?? 0,
+      unverifiedRepositories: organization.summary?.open ?? 0,
+      vulnerableAccounts: organization.summary?.open ?? 0,
+      scannedMembersCount: organization.members.filter((member) => member.status === "ACTIVE").length,
+    },
+  };
+}
+
+async function persistElectronSession(session: PersistedSession) {
+  try {
+    if (session.token) {
+      await window.electronAPI?.setSession?.(session);
+    } else {
+      await window.electronAPI?.clearSession?.();
+    }
+  } catch {
+    // optional in web context
+  }
 }
 
 export const AuthContext = createContext<AuthContextType | null>(null);
 
 export const AuthProvider = ({ children }: { children: ReactNode }) => {
   const [token, setTokenState] = useState<string | null>(null);
-  const [user, setUser] = useState<UserData | null>(null);
-  const [repo, setRepo] = useState<Repository[] | null>(null); // Fixed: Array state
+  const [user, setUser] = useState<SessionUser | null>(null);
+  const [repo, setRepo] = useState<Repository[] | null>(null);
   const [company, setCompany] = useState<CompanyData | null>(null);
+  const [organization, setOrganization] = useState<OrganizationData | null>(null);
   const [authReady, setAuthReady] = useState(false);
   const [sessionHydrated, setSessionHydrated] = useState(false);
 
-  const navigate = useNavigate(); // Fixed: Defined navigate
+  const navigate = useNavigate();
+
+  const buildSessionSnapshot = useCallback(
+    (next: Partial<PersistedSession> = {}): PersistedSession => ({
+      token: next.token !== undefined ? next.token : token,
+      user: next.user !== undefined ? next.user : user,
+      organization: next.organization !== undefined ? next.organization : organization,
+      company: next.company !== undefined ? next.company : company,
+      repo: next.repo !== undefined ? next.repo : repo,
+    }),
+    [token, user, organization, company, repo]
+  );
+
+  const setSession = useCallback(
+    async (session: PersistedSession) => {
+      setTokenState(session.token);
+      setUser(session.user);
+      setOrganization(session.organization);
+      setCompany(session.company);
+      setRepo(session.repo);
+
+      if (typeof localStorage !== "undefined") {
+        if (session.token) localStorage.setItem(AUTH_TOKEN_KEY, session.token);
+        else localStorage.removeItem(AUTH_TOKEN_KEY);
+      }
+
+      await persistElectronSession(session);
+    },
+    []
+  );
 
   useEffect(() => {
     let alive = true;
+
     (async () => {
       try {
-        let saved: string | null = null;
+        let savedSession: PersistedSession | null = null;
+
         try {
-          saved = (await window.electronAPI?.getToken?.()) ?? null;
+          savedSession = ((await window.electronAPI?.getSession?.()) ?? null) as PersistedSession | null;
         } catch {
-          saved = null;
+          savedSession = null;
         }
-        if (!saved && typeof localStorage !== "undefined") {
-          saved = localStorage.getItem(AUTH_TOKEN_KEY);
-        }
-        if (alive && saved) {
-          setTokenState(saved);
+
+        if (alive && savedSession?.token) {
+          setTokenState(savedSession.token);
+          setUser(savedSession.user || null);
+          setOrganization(savedSession.organization || null);
+          setCompany(savedSession.company || null);
+          setRepo(savedSession.repo || null);
+        } else {
+          let savedToken: string | null = null;
+          try {
+            savedToken = (await window.electronAPI?.getToken?.()) ?? null;
+          } catch {
+            savedToken = null;
+          }
+          if (!savedToken && typeof localStorage !== "undefined") {
+            savedToken = localStorage.getItem(AUTH_TOKEN_KEY);
+          }
+          if (alive && savedToken) {
+            setTokenState(savedToken);
+          }
         }
       } finally {
         if (alive) setSessionHydrated(true);
       }
     })();
+
     return () => {
       alive = false;
     };
   }, []);
 
+  const clearSessionState = useCallback(async () => {
+    await setSession({
+      token: null,
+      user: null,
+      organization: null,
+      company: null,
+      repo: null,
+    });
+  }, [setSession]);
+
   const setToken = async (newToken: string | null) => {
-    if (newToken) {
-      setAuthReady(false);
-    }
-    setTokenState(newToken);
-    if (typeof localStorage !== "undefined") {
-      if (newToken) localStorage.setItem(AUTH_TOKEN_KEY, newToken);
-      else localStorage.removeItem(AUTH_TOKEN_KEY);
-    }
-    try {
-      if (newToken) await window.electronAPI?.storeToken?.(newToken);
-      else await window.electronAPI?.clearToken?.();
-    } catch {
-      /* optional in web */
-    }
+    if (newToken) setAuthReady(false);
+    await setSession(
+      buildSessionSnapshot({
+        token: newToken,
+      })
+    );
   };
 
-  const login = async (token: string) => {
-    await setToken(token);
+  const login = async (authToken: string) => {
+    await setToken(authToken);
   };
 
   const logout = async () => {
-    await setToken(null);
-    setUser(null);
-    setCompany(null);
-    setRepo(null);
+    await clearSessionState();
     setAuthReady(true);
-    navigate("/");
+    navigate("/", { replace: true });
   };
 
   const refreshUser = useCallback(async () => {
@@ -174,69 +318,118 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     }
 
     setAuthReady(false);
+
     try {
-      const userRes = await axios.post("http://localhost:3000/api/authsss", { token });
-      if (userRes.data.success) {
-        const repos: Repository[] = userRes.data.repositories || [];
-        const raw = userRes.data.userDatas;
-        setRepo(repos);
-        setUser(mergeUserWithRepos(raw, repos));
-        setCompany(null);
-        setAuthReady(true);
-        return;
-      }
+      const meRes = await axios.get(`${API_BASE_URL}/api/auth/me`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
 
-      const companyRes = await axios.post("http://localhost:3000/api/auths", { token });
-      if (companyRes.data.success) {
-        const payload = companyRes.data.compnaydatas as CompanyData;
-        const { allEmployees, employees: empList, ...companyRest } = payload;
-        setCompany({
-          ...companyRest,
-          employees: empList ?? allEmployees ?? [],
+      if (meRes.data?.success) {
+        const repositories: Repository[] = meRes.data.repositories || [];
+        const nextUser: SessionUser = mergeUserWithRepos(meRes.data.user, repositories);
+        const nextOrganization: OrganizationData | null = meRes.data.organization || null;
+        const nextCompany = nextOrganization ? normalizeOrganizationAsCompany(nextOrganization) : null;
+
+        await setSession({
+          token,
+          user: nextUser,
+          organization: nextOrganization,
+          company: nextCompany,
+          repo: repositories,
         });
-        setRepo(null);
-        setUser(null);
+        setAuthReady(true);
+        return;
+      }
+    } catch {
+      // fall through to legacy auth refresh
+    }
+
+    try {
+      const userRes = await axios.post(`${API_BASE_URL}/api/authsss`, { token });
+      if (userRes.data.success) {
+        const repositories: Repository[] = userRes.data.repositories || [];
+        const raw = userRes.data.userDatas as SessionUser;
+        await setSession({
+          token,
+          user: mergeUserWithRepos(raw, repositories),
+          organization: null,
+          company: null,
+          repo: repositories,
+        });
         setAuthReady(true);
         return;
       }
 
-      await setToken(null);
-      setUser(null);
-      setCompany(null);
-      setRepo(null);
-      setAuthReady(true);
-      navigate("/");
+      const companyRes = await axios.post(`${API_BASE_URL}/api/auths`, { token });
+      if (companyRes.data.success) {
+        const payload = normalizeLegacyCompany(companyRes.data.compnaydatas as CompanyData);
+        await setSession({
+          token,
+          user: null,
+          organization: null,
+          company: payload,
+          repo: null,
+        });
+        setAuthReady(true);
+        return;
+      }
     } catch (error) {
-      console.error("❌ Auth Refresh Failed:", error);
-      setAuthReady(true);
+      console.error("Auth refresh failed:", error);
     }
-  }, [token, navigate]);
+
+    await clearSessionState();
+    setAuthReady(true);
+    navigate("/", { replace: true });
+  }, [token, navigate, setSession, clearSessionState]);
 
   useEffect(() => {
     refreshUser();
   }, [refreshUser]);
 
-  return (
-    <AuthContext.Provider
-      value={{
-        token,
-        user,
-        repo,
-        company,
-        sessionHydrated,
-        authReady,
-        setUser,
-        setRepo,
-        setCompany,
-        setToken,
-        login,
-        logout,
-        refreshUser,
-      }}
-    >
-      {children}
-    </AuthContext.Provider>
+  const role = useMemo<AuthRole | null>(() => {
+    if (user?.role) return user.role;
+    if (company) return "ORG_OWNER";
+    return null;
+  }, [user, company]);
+
+  const value = useMemo<AuthContextType>(
+    () => ({
+      token,
+      user,
+      repo,
+      company,
+      organization,
+      role,
+      isLegacyCompanySession: !!company && !organization && !user,
+      sessionHydrated,
+      authReady,
+      setUser,
+      setRepo,
+      setCompany,
+      setOrganization,
+      setToken,
+      setSession,
+      login,
+      logout,
+      refreshUser,
+    }),
+    [
+      token,
+      user,
+      repo,
+      company,
+      organization,
+      role,
+      sessionHydrated,
+      authReady,
+      setToken,
+      setSession,
+      logout,
+      refreshUser,
+    ]
   );
+
+  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 };
 
 export const userAuth = () => useContext(AuthContext);

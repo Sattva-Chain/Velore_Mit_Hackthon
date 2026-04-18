@@ -65,6 +65,24 @@ ipcMain.handle("clear-token", () => {
   return true;
 });
 
+ipcMain.handle("set-session", (_event, session) => {
+  store.set("authSession", session || null);
+  if (session?.token) {
+    store.set("companyToken", session.token);
+  }
+  return true;
+});
+
+ipcMain.handle("get-session", () => {
+  return store.get("authSession") || null;
+});
+
+ipcMain.handle("clear-session", () => {
+  store.delete("authSession");
+  store.delete("companyToken");
+  return true;
+});
+
 ipcMain.handle("github-token", (event, token) => {
   store.set("githubToken", token);
   return true;

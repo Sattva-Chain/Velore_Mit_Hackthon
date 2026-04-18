@@ -25,20 +25,20 @@ interface UserData {
   VerifiedRepositories?: string | number;
   UnverifiedRepositories?: string | number;
   TotalRepositories?: string | number;
-  companyId?: {
+  companyId?: string | {
     companyName: string;
     CompanyURL: string;
   };
 }
 
 const Settings: React.FC = () => {
-  const navigate = useNavigate();
   const auth = userAuth();
-  const { user, company, setUser, setCompany } = auth! as {
+  const { user, company, setUser, setCompany, logout } = auth! as unknown as {
     user: UserData | null;
     company: CompanyData | null;
     setUser: (u: any) => void;
     setCompany: (c: any) => void;
+    logout: () => Promise<void>;
   };
 
   const [activeTab, setActiveTab] = useState("Profile");
@@ -53,13 +53,7 @@ const Settings: React.FC = () => {
   }, [user, company]);
 
   const logoutHandler = async () => {
-    if (window.electronAPI) {
-      await window.electronAPI.clearToken();
-    }
-    setUser(null);
-    setCompany(null);
-    navigate("/");
-    window.location.reload();
+    await logout();
   };
 
   return (
@@ -136,7 +130,7 @@ const Settings: React.FC = () => {
                     <ProfileItem title="Total Repositories" value={user.TotalRepositories} />
                   </div>
 
-                  {user.companyId && (
+                  {user.companyId && typeof user.companyId !== "string" && (
                     <div className="mt-8 p-5 bg-[#0B1120] rounded-lg border border-[#1E293B]">
                       <h4 className="text-[#0ae8f0] font-bold text-xs uppercase tracking-widest mb-3">
                         Associated Organization

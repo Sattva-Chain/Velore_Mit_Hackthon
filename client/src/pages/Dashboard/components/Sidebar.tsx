@@ -16,7 +16,11 @@ const Sidebar: React.FC = () => {
   const [collapsed, setCollapsed] = useState(false);
   const location = useLocation();
   const navigate = useNavigate();
-  const { user, company, logout } = userAuth()!;
+  const { user, company, organization, role, logout, isLegacyCompanySession } = userAuth()!;
+
+  const isOrgOwner = role === "ORG_OWNER" || isLegacyCompanySession;
+  const isEmployee = role === "EMPLOYEE";
+  const isSoloDeveloper = role === "SOLO_DEVELOPER" || (!!user && !organization && !isOrgOwner);
 
   const links: {
     name: string;
@@ -27,12 +31,15 @@ const Sidebar: React.FC = () => {
   }[] = [
     { name: "Dashboard", icon: LayoutDashboard, path: "/Dashboard2", exact: true },
     { name: "Scans", icon: FileSearch, path: "/Dashboard2/scans", exact: true },
-    ...(user
+    ...(isSoloDeveloper
       ? [{ name: "Reports", icon: BarChart2, path: "/Dashboard2/reports", exact: true as const }]
       : []),
+    ...((isOrgOwner || isEmployee)
+      ? [{ name: "Vulnerabilities", icon: BarChart2, path: "/Dashboard2/vulnerabilities", exact: true as const }]
+      : []),
     { name: "Settings", icon: Settings, path: "/Dashboard2/settings", exact: true },
-    ...(!user
-      ? [{ name: "Team", icon: User, path: "/Dashboard2/manegEmploy", exact: false as const }]
+    ...(isOrgOwner
+      ? [{ name: "Team", icon: User, path: "/Dashboard2/team", exact: false as const }]
       : []),
   ];
 
@@ -118,10 +125,12 @@ const Sidebar: React.FC = () => {
             {!collapsed && (
               <div className="flex flex-col min-w-0">
                 <span className="text-sm font-medium text-zinc-200 truncate">
-                  {user ? (user.name?.trim() || user.email.split("@")[0]) : company?.companyName?.trim() || "Organization"}
+                  {user
+                    ? user.name?.trim() || user.email.split("@")[0]
+                    : organization?.name?.trim() || company?.companyName?.trim() || "Organization"}
                 </span>
                 <span className="text-xs text-zinc-500">
-                  {user ? "Developer" : "Admin"}
+                  {isOrgOwner ? "Organization Owner" : isEmployee ? "Employee" : "Developer"}
                 </span>
               </div>
             )}

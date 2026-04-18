@@ -19,21 +19,6 @@ import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
 
 // 🛑 MODIFIED IPC DECLARATION
-declare global {
-  interface Window {
-    electronAPI: {
-      storeToken: (token: string) => Promise<void>;
-      getToken: () => Promise<string | null>;
-      clearToken: () => Promise<void>;
-      storeGithubToken: (token: string) => Promise<void>;
-      getGithubToken: () => Promise<string | null>;
-      clearGithubToken: () => Promise<void>;
-      savePDF: (data: string, filename: string) => void;
-      onSavePDFSuccess: (callback: (args: { message: string; filePath: string }) => void) => void; 
-    };
-  }
-}
-
 type CodeSnippet = {
   lines: { num: number; text: string }[];
   highlightLine: number;
@@ -45,6 +30,10 @@ type Secret = {
   line: number | string;
   commit: string;
   branch: string;
+  author?: string | null;
+  email?: string | null;
+  commitTime?: string | null;
+  assignedTo?: string | null;
   snippet?: CodeSnippet | null;
   aiAnalysis?: {
     is_secret?: boolean;
@@ -330,6 +319,12 @@ const isClean = (r: ScanResults | null) => {
   return (r.summary?.secretsFound ?? 0) === 0 && (r.summary?.filesWithSecrets ?? 0) === 0;
 };
 
+const formatCommitTime = (value?: string | null) => {
+  if (!value) return "Unknown";
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
+};
+
 function UnifiedDiffLines({ lines }: { lines: string[] }) {
   return (
     <>
@@ -378,7 +373,8 @@ function UnifiedDiffLines({ lines }: { lines: string[] }) {
 }
 
 export default function Analysis() {
-  const { user, setUser, refreshUser } = userAuth() || { user: null, setUser: () => {}, refreshUser: () => {} };
+  const { user, token, setUser, refreshUser } =
+    userAuth() || { user: null, token: null, setUser: () => {}, refreshUser: async () => {} };
   const [gitUrl, setGitUrl] = useState<string>("");
   const [zipFile, setZipFile] = useState<File | null>(null);
   const [loading, setLoading] = useState<boolean>(false);
@@ -403,11 +399,18 @@ export default function Analysis() {
   const [diffModalOpen, setDiffModalOpen] = useState(false);
   const PAGE_SIZE = 6;
 
-  const axiosInstance = axios.create({
-    baseURL: "http://127.0.0.1:3000",
-    timeout: 600000,
-    headers: { "Content-Type": "application/json" },
-  });
+  const axiosInstance = useMemo(
+    () =>
+      axios.create({
+        baseURL: "http://127.0.0.1:3000",
+        timeout: 600000,
+        headers: {
+          "Content-Type": "application/json",
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+      }),
+    [token]
+  );
 
   const logToConsole = (text: string) => {
     const timestamp = new Date().toLocaleTimeString();
@@ -569,6 +572,26 @@ export default function Analysis() {
     });
     return arr;
   }, [results]);
+
+  const authorSummary = useMemo(() => {
+    const attributed = flatRows.filter((row) => row.secret.author || row.secret.email || row.secret.commitTime);
+    if (!attributed.length) {
+      return {
+        count: 0,
+        author: null as string | null,
+        email: null as string | null,
+        commitTime: null as string | null,
+      };
+    }
+
+    const first = attributed[0].secret;
+    return {
+      count: attributed.length,
+      author: first.author || first.assignedTo || null,
+      email: first.email || null,
+      commitTime: first.commitTime || null,
+    };
+  }, [flatRows]);
 
   const aiSummary = useMemo(() => {
     const scored = flatRows.filter((row) => row.secret.aiAnalysis?.confidence != null);
@@ -1014,7 +1037,7 @@ export default function Analysis() {
         )}
 
         {results?.scanMeta && !results.error && (
-          <section className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
+          <section className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-4">
             <div className="rounded-lg border border-zinc-800 bg-zinc-900/70 p-4">
               <p className="text-[10px] uppercase tracking-[0.22em] text-slate-500 font-bold">Scan Timeline</p>
               <p className="text-lg font-semibold text-white mt-2">
@@ -1054,6 +1077,22 @@ export default function Analysis() {
                 {verificationPerformed
                   ? `Auto-ran on ${formatTimestamp(scanMeta?.verification?.scannedAt || scanMeta?.scannedAt)} for ${scanMeta?.verification?.branch || remediation?.lastBranchName || "secure branch"}${scanMeta?.verification?.source === "fresh-remote-clone" ? " using a fresh remote clone" : ""}`
                   : "Runs automatically once the remediation branch is pushed."}
+              </p>
+            </div>
+            <div className="rounded-lg border border-zinc-800 bg-zinc-900/70 p-4">
+              <p className="text-[10px] uppercase tracking-[0.22em] text-slate-500 font-bold">Author Trace</p>
+              <p className="text-lg font-semibold text-white mt-2">
+                {authorSummary.author || (scanMeta?.sourceKind === "git" ? "Not resolved" : "Git only")}
+              </p>
+              <p className="text-xs text-slate-500 mt-2 truncate" title={authorSummary.email || ""}>
+                {authorSummary.email || (scanMeta?.sourceKind === "git" ? "Email unavailable" : "ZIP scans do not include blame")}
+              </p>
+              <p className="text-[11px] text-slate-500 mt-2">
+                {authorSummary.count > 0
+                  ? `${authorSummary.count} finding${authorSummary.count === 1 ? "" : "s"} enriched • ${formatCommitTime(authorSummary.commitTime)}`
+                  : scanMeta?.sourceKind === "git"
+                    ? "Git blame metadata not attached to this response yet."
+                    : "Use a Git repository scan to view author details."}
               </p>
             </div>
           </section>
@@ -1513,6 +1552,14 @@ export default function Analysis() {
                                 <div className="min-w-0">
                                   <p className="text-sm font-semibold text-slate-100 truncate">{r.file.split('/').pop()}</p>
                                   <p className="text-[11px] text-slate-500 truncate mt-1">{r.file}</p>
+                                  {(r.secret.author || r.secret.email) && (
+                                    <div className="mt-2 space-y-1">
+                                      <p className="text-[11px] text-slate-400 truncate">
+                                        Author: <span className="text-slate-200">{r.secret.author || "Unknown"}</span>
+                                      </p>
+                                      <p className="text-[11px] text-slate-500 truncate">{r.secret.email || "No email"}</p>
+                                    </div>
+                                  )}
                                 </div>
                               </td>
                               <td className="px-4 py-4">
@@ -1556,7 +1603,15 @@ export default function Analysis() {
                                 )}
                               </td>
                               <td className="px-4 py-4">
-                                <span className="inline-flex items-center rounded-full border border-zinc-800 bg-slate-950/70 px-2.5 py-1 text-[11px] font-semibold text-slate-300">#{r.secret.line}</span>
+                                <div className="space-y-2">
+                                  <span className="inline-flex items-center rounded-full border border-zinc-800 bg-slate-950/70 px-2.5 py-1 text-[11px] font-semibold text-slate-300">#{r.secret.line}</span>
+                                  {(r.secret.assignedTo || r.secret.commitTime) && (
+                                    <div className="text-[11px] text-slate-500">
+                                      <p>{r.secret.assignedTo ? `Assigned: ${r.secret.assignedTo}` : "Assigned: Unknown"}</p>
+                                      <p>{r.secret.commitTime ? formatCommitTime(r.secret.commitTime) : "Commit time unavailable"}</p>
+                                    </div>
+                                  )}
+                                </div>
                               </td>
                               <td className="px-4 py-4">
                                 <button
@@ -1729,6 +1784,13 @@ export default function Analysis() {
                     <div>
                       <span className="px-2 py-1 rounded bg-rose-500/10 text-rose-400 text-[10px] font-bold uppercase tracking-wider border border-rose-500/20">{s.type}</span>
                       <p className="text-xs text-slate-400 mt-3 font-mono">Line: <span className="text-blue-400">{s.line}</span> • Branch: {s.branch}</p>
+                      {(s.author || s.email || s.commitTime) && (
+                        <div className="mt-3 space-y-1 text-xs text-slate-400">
+                          <p>Author: <span className="text-slate-200">{s.author || "Unknown"}</span></p>
+                          <p>Email: <span className="text-slate-300">{s.email || "Unavailable"}</span></p>
+                          <p>Commit Time: <span className="text-slate-300">{formatCommitTime(s.commitTime)}</span></p>
+                        </div>
+                      )}
                     </div>
                     <button onClick={() => setRevealSecrets((p) => ({ ...p, [findingKey]: !p[findingKey] }))} className="px-3 py-1.5 rounded-lg border border-zinc-700 text-[10px] font-bold hover:bg-slate-800 text-white">
                       {revealSecrets[findingKey] ? 'Mask Secret' : 'Reveal Secret'}

@@ -33,7 +33,7 @@ function cleanupExpiredSessions() {
 
 setInterval(cleanupExpiredSessions, 1000 * 60 * 10).unref?.();
 
-function createSession({ repoPath, sourceType, repoUrl = null, branch = null, results = null }) {
+function createSession({ repoPath, sourceType, repoUrl = null, branch = null, results = null, persistenceContext = null }) {
   const sessionId = crypto.randomUUID();
   const session = {
     sessionId,
@@ -42,6 +42,7 @@ function createSession({ repoPath, sourceType, repoUrl = null, branch = null, re
     repoUrl,
     branch,
     results,
+    persistenceContext,
     createdAt: now(),
     updatedAt: now(),
     lastCommitSha: null,
