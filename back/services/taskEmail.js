@@ -27,19 +27,45 @@ function buildOAuthTransportOptions() {
 }
 
 function buildSmtpTransportOptions() {
+  const service = String(process.env.SMTP_SERVICE || "").trim();
   const host = String(process.env.SMTP_HOST || "").trim();
   const user = String(process.env.SMTP_USER || "").trim();
   const pass = String(process.env.SMTP_PASS || "").trim();
-  const port = Number(process.env.SMTP_PORT || 587);
-  const secure = String(process.env.SMTP_SECURE || "").trim().toLowerCase() === "true";
+  const explicitPort = String(process.env.SMTP_PORT || "").trim();
+  const explicitSecure = String(process.env.SMTP_SECURE || "").trim().toLowerCase();
 
   if (!user || !pass) return null;
-  if (host) return { host, port, secure, auth: { user, pass } };
+
+  if (service) {
+    return {
+      service,
+      auth: { user, pass },
+    };
+  }
+
+  if (host) {
+    return {
+      host,
+      port: Number(explicitPort || 587),
+      secure: explicitSecure === "true",
+      auth: { user, pass },
+    };
+  }
+
+  if (/@gmail\.com$/i.test(user)) {
+    return {
+      host: "smtp.gmail.com",
+      port: Number(explicitPort || 465),
+      secure: explicitSecure ? explicitSecure === "true" : true,
+      auth: { user, pass },
+    };
+  }
+
   return null;
 }
 
 function getTaskTransporter() {
-  const transportOptions = buildOAuthTransportOptions() || buildSmtpTransportOptions();
+  const transportOptions = buildSmtpTransportOptions() || buildOAuthTransportOptions();
   if (!transportOptions) return null;
   return nodemailer.createTransport(transportOptions);
 }
@@ -226,10 +252,19 @@ async function sendTaskAssignmentEmail(payload) {
       messageId: info.messageId,
     };
   } catch (error) {
+    const message = String(error?.message || "Email delivery failed.");
+    const suggestion =
+      /invalid login|auth|credentials|BadCredentials/i.test(message)
+        ? "Check Gmail SMTP credentials. For Gmail, use an App Password and keep 2-Step Verification enabled."
+        : /ENOTFOUND|ECONNREFUSED|ETIMEDOUT/i.test(message)
+          ? "Check SMTP host, port, and network access to the mail server."
+          : "Verify mail configuration and try sending the task email again.";
+
     return {
       delivered: false,
       skipped: false,
-      message: String(error?.message || "Email delivery failed."),
+      message,
+      suggestion,
     };
   }
 }
