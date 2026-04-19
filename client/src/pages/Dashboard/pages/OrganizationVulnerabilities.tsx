@@ -17,7 +17,7 @@ function statusTone(status?: string | null) {
   const value = String(status || "OPEN").toUpperCase();
   if (value === "FIXED") return "border-emerald-500/30 bg-emerald-500/10 text-emerald-300";
   if (value === "IGNORED") return "border-amber-500/30 bg-amber-500/10 text-amber-300";
-  return "border-zinc-700 bg-zinc-900 text-zinc-300";
+  return "border-zinc-700 bg-zinc-900 text-zinc-300"
 }
 
 export default function OrganizationVulnerabilities() {
