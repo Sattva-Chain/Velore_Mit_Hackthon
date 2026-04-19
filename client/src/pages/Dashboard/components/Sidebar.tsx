@@ -4,6 +4,7 @@ import {
   LayoutDashboard,
   FileSearch,
   BarChart2,
+  ListTodo,
   Settings,
   ChevronLeft,
   ChevronRight,
@@ -31,6 +32,7 @@ const Sidebar: React.FC = () => {
   }[] = [
     { name: "Dashboard", icon: LayoutDashboard, path: "/Dashboard2", exact: true },
     { name: "Scans", icon: FileSearch, path: "/Dashboard2/scans", exact: true },
+    { name: "All Tasks", icon: ListTodo, path: "/Dashboard2/tasks", exact: true },
     ...((isSoloDeveloper || isEmployee)
       ? [{ name: "Reports", icon: BarChart2, path: "/Dashboard2/reports", exact: true as const }]
       : []),

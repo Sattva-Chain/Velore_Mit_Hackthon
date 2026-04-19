@@ -1,25 +1,24 @@
 import { useEffect, useMemo, useState } from "react";
 import axios from "axios";
+import { CheckCircle2, Sparkles } from "lucide-react";
 import { userAuth } from "../../../context/Auth";
+import AssignTaskModal, { type AssignableVulnerability } from "../components/AssignTaskModal";
 
 const API_BASE_URL = "http://localhost:3000";
 
-type VulnerabilityRecord = {
-  _id: string;
-  repoName?: string | null;
-  repoUrl?: string | null;
-  branch?: string | null;
-  file?: string | null;
-  line?: number | null;
-  secretType?: string | null;
-  severity?: string | null;
-  author?: string | null;
-  authorEmail?: string | null;
+type VulnerabilityRecord = AssignableVulnerability & {
   commitTime?: string | null;
   status?: string | null;
   fixedByEmail?: string | null;
   fixedAt?: string | null;
 };
+
+function statusTone(status?: string | null) {
+  const value = String(status || "OPEN").toUpperCase();
+  if (value === "FIXED") return "border-emerald-500/30 bg-emerald-500/10 text-emerald-300";
+  if (value === "IGNORED") return "border-amber-500/30 bg-amber-500/10 text-amber-300";
+  return "border-zinc-700 bg-zinc-900 text-zinc-300";
+}
 
 export default function OrganizationVulnerabilities() {
   const { token, organization, user, role } = userAuth()!;
@@ -34,6 +33,8 @@ export default function OrganizationVulnerabilities() {
     status: "",
     severity: "",
   });
+  const [taskModalRecord, setTaskModalRecord] = useState<VulnerabilityRecord | null>(null);
+  const [createdTaskByVulnerabilityId, setCreatedTaskByVulnerabilityId] = useState<Record<string, string>>({});
 
   useEffect(() => {
     let active = true;
@@ -79,6 +80,8 @@ export default function OrganizationVulnerabilities() {
     return "Organization Vulnerabilities";
   }, [role]);
 
+  const canAssignTasks = role === "ORG_OWNER" || role === "SOLO_DEVELOPER";
+
   return (
     <div className="w-full flex flex-col gap-8 text-zinc-200 pb-4">
       <header className="flex flex-col md:flex-row md:items-center justify-between gap-4 pb-6 border-b border-zinc-800">
@@ -89,7 +92,7 @@ export default function OrganizationVulnerabilities() {
           </p>
         </div>
         <div className="text-sm text-zinc-500">
-          {organization?.name || user?.email || "LeakShield"}
+          {organization?.name || user?.email || "SecureScan"}
         </div>
       </header>
 
@@ -158,34 +161,61 @@ export default function OrganizationVulnerabilities() {
         </div>
       </section>
 
-      <section className="rounded-lg border border-zinc-800 bg-zinc-900/70 overflow-hidden">
-        <div className="overflow-x-auto">
-          <table className="w-full text-left">
-            <thead className="bg-zinc-950/40">
-              <tr>
-                {["Repository", "Branch", "File", "Line", "Type", "Severity", "Author", "Email", "Commit Time", "Status", "Patched By"].map((headingCell) => (
-                  <th key={headingCell} className="px-4 py-3 text-xs uppercase tracking-[0.18em] text-zinc-500">
-                    {headingCell}
-                  </th>
-                ))}
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-zinc-800">
-              {records.map((row) => (
-                <tr key={row._id} className="hover:bg-zinc-800/30 transition-colors">
-                  <td className="px-4 py-4 text-sm text-zinc-200">{row.repoName || row.repoUrl || "Unknown"}</td>
-                  <td className="px-4 py-4 text-sm text-zinc-400">{row.branch || "N/A"}</td>
-                  <td className="px-4 py-4 text-sm text-zinc-300">{row.file || "N/A"}</td>
-                  <td className="px-4 py-4 text-sm text-zinc-400">{row.line ?? "N/A"}</td>
-                  <td className="px-4 py-4 text-sm text-blue-300">{row.secretType || "Secret"}</td>
-                  <td className="px-4 py-4 text-sm text-zinc-300">{row.severity || "MEDIUM"}</td>
-                  <td className="px-4 py-4 text-sm text-zinc-300">{row.author || "Unknown"}</td>
-                  <td className="px-4 py-4 text-sm text-zinc-400 font-mono">{row.authorEmail || "N/A"}</td>
-                  <td className="px-4 py-4 text-sm text-zinc-400">
+      <section className="space-y-4">
+        {records.map((row) => (
+          <article
+            key={row._id}
+            className="rounded-2xl border border-zinc-800 bg-zinc-900/70 p-5 shadow-[0_0_0_1px_rgba(24,24,27,0.25)] transition hover:border-zinc-700 hover:bg-zinc-900"
+          >
+            <div className="grid gap-5 xl:grid-cols-[1.45fr_1fr_auto] xl:items-start">
+              <div className="space-y-4 min-w-0">
+                <div className="flex flex-wrap items-start gap-3">
+                  <div className="min-w-0 flex-1">
+                    <p className="text-base font-semibold text-zinc-100 break-words">
+                      {row.repoName || row.repoUrl || "Unknown repository"}
+                    </p>
+                    <p className="mt-2 text-xs text-zinc-500 break-all">{row.file || "N/A"}</p>
+                  </div>
+                  <span className={`inline-flex rounded-full border px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] ${statusTone(row.status)}`}>
+                    {row.status || "OPEN"}
+                  </span>
+                </div>
+
+                <div className="grid gap-3 md:grid-cols-2 2xl:grid-cols-4">
+                  <div className="rounded-xl border border-zinc-800 bg-zinc-950/70 p-3">
+                    <p className="text-[11px] uppercase tracking-[0.18em] text-zinc-500">Branch</p>
+                    <p className="mt-2 text-sm text-zinc-100">{row.branch || "N/A"}</p>
+                  </div>
+                  <div className="rounded-xl border border-zinc-800 bg-zinc-950/70 p-3">
+                    <p className="text-[11px] uppercase tracking-[0.18em] text-zinc-500">Line</p>
+                    <p className="mt-2 text-sm text-zinc-100">{row.line ?? "N/A"}</p>
+                  </div>
+                  <div className="rounded-xl border border-zinc-800 bg-zinc-950/70 p-3">
+                    <p className="text-[11px] uppercase tracking-[0.18em] text-zinc-500">Type</p>
+                    <p className="mt-2 text-sm text-blue-300">{row.secretType || "Secret"}</p>
+                  </div>
+                  <div className="rounded-xl border border-zinc-800 bg-zinc-950/70 p-3">
+                    <p className="text-[11px] uppercase tracking-[0.18em] text-zinc-500">Severity</p>
+                    <p className="mt-2 text-sm text-zinc-100">{row.severity || "MEDIUM"}</p>
+                  </div>
+                </div>
+              </div>
+
+              <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-1">
+                <div className="rounded-xl border border-zinc-800 bg-zinc-950/70 p-3">
+                  <p className="text-[11px] uppercase tracking-[0.18em] text-zinc-500">Author</p>
+                  <p className="mt-2 text-sm text-zinc-100">{row.author || "Unknown"}</p>
+                  <p className="mt-1 break-all font-mono text-xs text-zinc-500">{row.authorEmail || "N/A"}</p>
+                </div>
+                <div className="rounded-xl border border-zinc-800 bg-zinc-950/70 p-3">
+                  <p className="text-[11px] uppercase tracking-[0.18em] text-zinc-500">Commit Time</p>
+                  <p className="mt-2 text-sm text-zinc-100">
                     {row.commitTime ? new Date(row.commitTime).toLocaleString() : "N/A"}
-                  </td>
-                  <td className="px-4 py-4 text-sm text-zinc-300">{row.status || "OPEN"}</td>
-                  <td className="px-4 py-4 text-sm text-zinc-400">
+                  </p>
+                </div>
+                <div className="rounded-xl border border-zinc-800 bg-zinc-950/70 p-3">
+                  <p className="text-[11px] uppercase tracking-[0.18em] text-zinc-500">Patched By</p>
+                  <p className="mt-2 break-words text-sm text-zinc-100">
                     {row.status === "FIXED"
                       ? row.fixedByEmail
                         ? `${row.fixedByEmail}${row.fixedAt ? ` · ${new Date(row.fixedAt).toLocaleString()}` : ""}`
@@ -193,20 +223,54 @@ export default function OrganizationVulnerabilities() {
                           ? new Date(row.fixedAt).toLocaleString()
                           : "Recorded"
                       : "—"}
-                  </td>
-                </tr>
-              ))}
-              {!records.length && (
-                <tr>
-                  <td colSpan={11} className="px-4 py-8 text-center text-sm text-zinc-500">
-                    No vulnerability records match the current filters.
-                  </td>
-                </tr>
+                  </p>
+                </div>
+              </div>
+
+              {canAssignTasks && (
+                <div className="flex xl:justify-end">
+                  {createdTaskByVulnerabilityId[row._id] ? (
+                    <span className="inline-flex h-fit items-center gap-2 whitespace-nowrap rounded-full border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-emerald-300">
+                      <CheckCircle2 size={13} />
+                      Task created
+                    </span>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => setTaskModalRecord(row)}
+                      className="inline-flex h-fit items-center gap-2 whitespace-nowrap rounded-full border border-blue-500/30 bg-blue-500/10 px-4 py-2.5 text-xs font-semibold text-blue-200 transition hover:border-blue-400/40 hover:bg-blue-500/15 hover:text-white"
+                    >
+                      <Sparkles size={14} />
+                      Assign Task
+                    </button>
+                  )}
+                </div>
               )}
-            </tbody>
-          </table>
-        </div>
+            </div>
+          </article>
+        ))}
+
+        {!records.length && (
+          <div className="rounded-2xl border border-zinc-800 bg-zinc-900/70 px-4 py-8 text-center text-sm text-zinc-500">
+            No vulnerability records match the current filters.
+          </div>
+        )}
       </section>
+
+      {taskModalRecord && token && (
+        <AssignTaskModal
+          open={Boolean(taskModalRecord)}
+          token={token}
+          vulnerability={taskModalRecord}
+          onClose={() => setTaskModalRecord(null)}
+          onCreated={(task) =>
+            setCreatedTaskByVulnerabilityId((current) => ({
+              ...current,
+              [taskModalRecord._id]: task._id,
+            }))
+          }
+        />
+      )}
     </div>
   );
 }

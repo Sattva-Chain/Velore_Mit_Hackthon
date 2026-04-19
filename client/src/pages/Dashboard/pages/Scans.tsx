@@ -23,6 +23,7 @@ import {
   UserRound,
 } from "lucide-react";
 import { userAuth } from "../../../context/Auth";
+import AssignTaskModal, { type AssignableVulnerability } from "../components/AssignTaskModal";
 
 // --- PDF LIBRARIES IMPORT ---
 import jsPDF from "jspdf";
@@ -376,8 +377,8 @@ function UnifiedDiffLines({ lines }: { lines: string[] }) {
 }
 
 export default function Analysis() {
-  const { user, token, setUser, refreshUser } =
-    userAuth() || { user: null, token: null, setUser: () => {}, refreshUser: async () => {} };
+  const { user, token, setUser, refreshUser, role } =
+    userAuth() || { user: null, token: null, setUser: () => {}, refreshUser: async () => {}, role: null };
   const [gitUrl, setGitUrl] = useState<string>("");
   const [zipFile, setZipFile] = useState<File | null>(null);
   const [loading, setLoading] = useState<boolean>(false);
@@ -400,7 +401,10 @@ export default function Analysis() {
   const [shipMode, setShipMode] = useState<"commit" | "push">("push");
   const [lastCommitSha, setLastCommitSha] = useState<string | null>(null);
   const [diffModalOpen, setDiffModalOpen] = useState(false);
+  const [taskModalVulnerability, setTaskModalVulnerability] = useState<AssignableVulnerability | null>(null);
+  const [createdTaskByFindingKey, setCreatedTaskByFindingKey] = useState<Record<string, string>>({});
   const PAGE_SIZE = 6;
+  const canCreateTasks = role === "ORG_OWNER";
 
   const axiosInstance = useMemo(
     () =>
@@ -575,6 +579,30 @@ export default function Analysis() {
     });
     return arr;
   }, [results]);
+
+  const toAssignableVulnerability = (row: { file: string; secret: Secret; findingKey: string }): AssignableVulnerability => {
+    const repoUrl = results?.scanMeta?.repoUrl || gitUrl || null;
+    const repoName = String(repoUrl || "")
+      .split("/")
+      .filter(Boolean)
+      .pop()
+      ?.replace(/\.git$/i, "");
+    const riskScore = row.secret.aiAnalysis?.risk_score ?? null;
+
+    return {
+      _id: row.findingKey,
+      repoName: repoName || repoUrl || "Repository",
+      repoUrl,
+      branch: row.secret.branch || results?.scanMeta?.branch || null,
+      file: row.file,
+      line: Number(row.secret.line) || null,
+      secretType: row.secret.type || "Secret",
+      severity: riskScore != null ? (riskScore >= 0.8 ? "HIGH" : riskScore <= 0.35 ? "LOW" : "MEDIUM") : "MEDIUM",
+      author: row.secret.author || null,
+      authorEmail: row.secret.email || row.secret.assignedTo || null,
+      status: "OPEN",
+    };
+  };
 
   const authorSummary = useMemo(() => {
     const attributed = flatRows.filter((row) => row.secret.author || row.secret.email || row.secret.commitTime);
@@ -1671,6 +1699,21 @@ export default function Analysis() {
                                   >
                                     Inspect
                                   </button>
+                                  {canCreateTasks && (
+                                    createdTaskByFindingKey[r.findingKey] ? (
+                                      <span className="inline-flex whitespace-nowrap px-3 py-2 rounded-full border border-emerald-500/30 bg-emerald-500/10 text-[11px] font-semibold text-emerald-300">
+                                        Task created
+                                      </span>
+                                    ) : (
+                                      <button
+                                        type="button"
+                                        onClick={() => setTaskModalVulnerability(toAssignableVulnerability(r))}
+                                        className="inline-flex whitespace-nowrap px-3 py-2 rounded-full border border-blue-500/30 bg-blue-500/10 hover:bg-blue-500/20 text-[11px] font-semibold text-blue-300"
+                                      >
+                                        Create Task
+                                      </button>
+                                    )
+                                  )}
                                 </div>
                               </div>
                             </div>
@@ -1864,6 +1907,21 @@ export default function Analysis() {
                                 <button type="button" onClick={() => setSelectedFile(r.file)} className="px-3 py-2 rounded-xl bg-blue-500/10 text-blue-400 hover:bg-blue-500/20 text-[11px] font-semibold">
                                   Inspect
                                 </button>
+                                {canCreateTasks && (
+                                  createdTaskByFindingKey[r.findingKey] ? (
+                                    <span className="inline-flex whitespace-nowrap px-3 py-2 rounded-full border border-emerald-500/30 bg-emerald-500/10 text-[11px] font-semibold text-emerald-300">
+                                      Task created
+                                    </span>
+                                  ) : (
+                                    <button
+                                      type="button"
+                                      onClick={() => setTaskModalVulnerability(toAssignableVulnerability(r))}
+                                      className="inline-flex whitespace-nowrap px-3 py-2 rounded-full border border-blue-500/30 bg-blue-500/10 hover:bg-blue-500/20 text-[11px] font-semibold text-blue-300"
+                                    >
+                                      Create Task
+                                    </button>
+                                  )
+                                )}
                                 </div>
                               </td>
                             </tr>
@@ -2080,6 +2138,21 @@ export default function Analysis() {
             </div>
           </div>
         </div>
+      )}
+
+      {taskModalVulnerability && token && (
+        <AssignTaskModal
+          open={Boolean(taskModalVulnerability)}
+          token={token}
+          vulnerability={taskModalVulnerability}
+          onClose={() => setTaskModalVulnerability(null)}
+          onCreated={(task) => {
+            setCreatedTaskByFindingKey((current) => ({
+              ...current,
+              [String(taskModalVulnerability._id)]: task._id,
+            }));
+          }}
+        />
       )}
 
       {/* Global Toast Notification */}

@@ -1,7 +1,7 @@
 
 
 import './App.css'
-import {Navigate, Route,Routes} from "react-router-dom"
+import { Route,Routes } from "react-router-dom"
 import DashBord from './pages/DashBord'
 import Analysis from './pages/components/Analysis'
 import Profile from './pages/components/Profile'
@@ -22,62 +22,63 @@ import { userAuth } from './context/Auth'
 import EmployedLogs from './pages/Dashboard/pages/EmployedLogs'
 import Report from './pages/Dashboard/pages/Report'
 import OrganizationVulnerabilities from './pages/Dashboard/pages/OrganizationVulnerabilities'
-function App() {
+import AllTasks from './pages/Dashboard/pages/AllTasks'
 
-const { company, user, token, sessionHydrated } = userAuth()!
+function App() {
+  const { sessionHydrated } = userAuth()!
+
   return (
     <>
-<Toaster
+      <Toaster
         position="top-right"
         reverseOrder={false}
         toastOptions={{
-          // Default options for all toasts
           style: {
-            background: "#9CA3AF", // Tailwind gray-400
-            color: "#FFFFFF",      // White text
+            background: "#9CA3AF",
+            color: "#FFFFFF",
             fontWeight: "500",
             borderRadius: "0.5rem",
           },
         }}
       />
-    <Routes>
-      <Route
+      <Routes>
+        <Route
           path="/"
           element={
             !sessionHydrated ? (
               <div className="min-h-screen bg-zinc-950 flex items-center justify-center text-zinc-500 text-sm">
-                Loading session…
+                Loading session...
               </div>
-            ) : company || user || token ? (
-              <Navigate to="/Dashboard2" replace />
             ) : (
-              <LoginPage />
+              <Home />
             )
           }
         />
-      <Route path='/register' element={<RegisterPage/>}/>
-      <Route path='/invite/accept' element={<InviteAcceptPage/>}/>
-    
-      <Route path='/login' element={<EmployeeLogin/>}/>
-      <Route path='/singup' element={<EmployeeSignup/>}/>
-      {/* old dashboard */}
-      <Route path='/Dashboard' element={<DashBord/>}>
-         <Route index  element={<Analysis/>} />
-         <Route path='Profile'  element={<Profile/>} />
-         <Route path='Setting'  element={<Seeting/>} />
-      </Route>
-      {/* New DashBoard */}
-       <Route path='/Dashboard2' element={<MainDashBoardLayout/>}>
-         <Route index  element={<DashboardHome/>} />
-         <Route path='settings'  element={<Settings/>} />
-         <Route path='scans'  element={<Scans/>} />
-         <Route path='reports'  element={<Report/>} />
-         <Route path='vulnerabilities'  element={<OrganizationVulnerabilities/>} />
-         <Route path='manegEmploy/employedLogs/:id'  element={<EmployedLogs/>} />
-         <Route path='manegEmploy'  element={<TeamHub/>} />
-         <Route path='team'  element={<TeamHub/>} />
-      </Route>
-    </Routes>
+        <Route path='/signin' element={<LoginPage/>}/>
+        <Route path='/register' element={<RegisterPage/>}/>
+        <Route path='/invite/accept' element={<InviteAcceptPage/>}/>
+
+        <Route path='/login' element={<EmployeeLogin/>}/>
+        <Route path='/singup' element={<EmployeeSignup/>}/>
+
+        <Route path='/Dashboard' element={<DashBord/>}>
+          <Route index  element={<Analysis/>} />
+          <Route path='Profile'  element={<Profile/>} />
+          <Route path='Setting'  element={<Seeting/>} />
+        </Route>
+
+        <Route path='/Dashboard2' element={<MainDashBoardLayout/>}>
+          <Route index  element={<DashboardHome/>} />
+          <Route path='settings'  element={<Settings/>} />
+          <Route path='scans'  element={<Scans/>} />
+          <Route path='tasks'  element={<AllTasks/>} />
+          <Route path='reports'  element={<Report/>} />
+          <Route path='vulnerabilities'  element={<OrganizationVulnerabilities/>} />
+          <Route path='manegEmploy/employedLogs/:id'  element={<EmployedLogs/>} />
+          <Route path='manegEmploy'  element={<TeamHub/>} />
+          <Route path='team'  element={<TeamHub/>} />
+        </Route>
+      </Routes>
     </>
   )
 }

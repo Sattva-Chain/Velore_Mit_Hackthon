@@ -18,6 +18,7 @@ const mongoose = require("mongoose");
 const router = require("./routes/user");
 const authRouter = require("./routes/auth");
 const organizationRouter = require("./routes/organizations");
+const tasksRouter = require("./routes/tasks");
 const { default: user } = require("./models/user");
 const { default: comp } = require("./models/company");
 const repoModule = require("./models/repo");
@@ -41,6 +42,12 @@ const Repository = repoModule.default || repoModule;
 const execFileAsync = util.promisify(execFile);
 const app = express();
 const PORT = 3000;
+const asanaConfiguredOnBoot = Boolean(
+  String(process.env.ASANA_ACCESS_TOKEN || "").trim() &&
+    String(process.env.ASANA_WORKSPACE_GID || "").trim() &&
+    String(process.env.ASANA_PROJECT_GID || "").trim()
+);
+console.log(`Asana config loaded: ${asanaConfiguredOnBoot ? "yes" : "no"}`);
 
 async function ensureRepositoryIndexes() {
   try {
@@ -89,6 +96,7 @@ mongoose
 app.use("/api", router);
 app.use("/api/auth", authRouter);
 app.use("/api/organizations", organizationRouter);
+app.use("/api/tasks", tasksRouter);
 
 // Upload + Temp
 const uploadDir = path.join(__dirname, "uploads");
